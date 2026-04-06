@@ -7,12 +7,12 @@ import time
 
 
 class Downloader:
-    def __init__(self, max_retries: int = 3, chunk_size: int = 8192):
+    def __init__(self, max_retries: int = 3, chunk_size: int = 8192, user_agent: str = "Euora Craft Launcher"):
         self.download_status = True
         self.__download_total: List[Tuple[str, str]] = []
         self.__download_done: List[str] = []
         self.output_progress = self.__default_output_progress
-        self.output_log = self.__default_output_log
+        self.output_log: Callable[[str], None] = print
         self.lock = threading.Lock()
         self.max_retries = max_retries
         self.chunk_size = chunk_size
@@ -21,7 +21,7 @@ class Downloader:
         self.session = requests.Session()
         self.session.headers.update({
             # "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            "User-Agent": "Euora Craft Launcher"
+            "User-Agent": user_agent
         })
 
     def __default_output_progress(self, total_files: list, downloaded_files: list):
@@ -30,10 +30,6 @@ class Downloader:
             done = len(downloaded_files)
             if total > 0:
                 print(f"下载进度: {done}/{total} ({done / total * 100:.1f}%)")
-
-    @staticmethod
-    def __default_output_log(log: str):
-        print(log)
 
     def set_output_progress(self, output_function: Callable[[list, list], None]) -> None:
         def safe_output(total: list, done: list):

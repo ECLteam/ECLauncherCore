@@ -7,15 +7,11 @@ import json
 
 class FilesChecker:
     def __init__(self, api_url: C_Libs.ApiUrl | None = None, downloader: C_Downloader.Downloader | None = None):
-        self.downloader = downloader if downloader else C_Downloader.Downloader()
-        self.output_log = self.__default_output_log
-        self.api_url = api_url if api_url else C_Libs.ApiUrl()
+        self.downloader = downloader or C_Downloader.Downloader()
+        self.output_log: Callable[[str], None] = print
+        self.api_url = api_url or C_Libs.ApiUrl()
 
-    @staticmethod
-    def __default_output_log(log: str):
-        print(log)
-
-    def set_output_log(self, output_function: Callable[[str, bool], None]) -> None:
+    def set_output_log(self, output_function: Callable[[str], None]) -> None:
         self.output_log = output_function
 
     def set_api_url(self, api_url_dict: dict):

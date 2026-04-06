@@ -2,18 +2,18 @@ from . import C_Libs, C_Downloader, C_FilesChecker
 from typing import Callable
 from shutil import rmtree
 from pathlib import Path
+from uuid import uuid4
 import subprocess
 import platform
-from uuid import uuid4
 import json
 import re
 
 
 class ECLauncherCore:
     def __init__(self):
-        self.output_launcher_log = self.__default_output_log
-        self.output_minecraft_instance = self.__default_output_log
-        self.output_jvm_params = self.__default_output_log
+        self.output_launcher_log: Callable[[str], None] = print
+        self.output_minecraft_instance: Callable[[dict[str, str | bool | subprocess.Popen]], None] = print
+        self.output_jvm_params: Callable[[str], None] = print
 
         self.api_url = C_Libs.ApiUrl()
         self.downloader = C_Downloader.Downloader()
@@ -32,10 +32,6 @@ class ECLauncherCore:
         }
         """
 
-    @staticmethod
-    def __default_output_log(log):
-        print(log)
-
     def set_api_url(self, api_url_dict: dict):  # 等价于 api_url.update_from_dict
         self.api_url.update_from_dict(api_url_dict)
 
@@ -52,7 +48,7 @@ class ECLauncherCore:
                          user_type: str = "legacy", auth_uuid: str = "", access_token: str = "None",
                          first_set_lang: str = "zh_CN", set_lang: str = "", launcher_name: str = "ECL",
                          launcher_version: str = "0.1145", default_version_type: bool = False,
-                         custom_jvm_params: str = "", window_width: int | str = "${resolution_width}",
+                         custom_jvm_params: list[str] = None, window_width: int | str = "${resolution_width}",
                          window_height: int | str = "${resolution_width}",
                          completes_file: bool = True, download_max_thread: int = 32,
                          output_jvm_params: bool = False, write_run_script: bool = False, run_script_path: str | Path = "."):
@@ -99,12 +95,21 @@ class ECLauncherCore:
             run_script_suffix = ".command"
             jvm_params_list.append(f"-XstartOnFirstThread")
 
-        jvm_params_list.append(f"-Xms256M -Xmx{max_use_ram}M -Dstderr.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dfile.encoding=COMPAT -XX:+UseZGC -XX:-UseAdaptiveSizePolicy -XX:-OmitStackTraceInFastThrow -Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True -Dlog4j2.formatMsgNoLookups=true")
+        jvm_params_list.extend([
+            "-Xms256M",
+            f"-Xmx{max_use_ram}M",
+            "-Dstderr.encoding=UTF-8",
+            "-Dstdout.encoding=UTF-8",
+            "-Dfile.encoding=UTF-8",
+            "-XX:+UseG1GC",
+            "-XX:-UseAdaptiveSizePolicy",
+            "-XX:-OmitStackTraceInFastThrow",
+            "-Dlog4j2.formatMsgNoLookups=true",
+            "-Dfml.ignoreInvalidMinecraftCertificates=True",
+            "-Dfml.ignorePatchDiscrepancies=True"
+        ])
 
-        if custom_jvm_params:  # 添加自定义Jvm
-            for a_jvm_param in custom_jvm_params.split(" "):
-                if not a_jvm_param: continue
-                jvm_params_list.append(a_jvm_param.replace(" ", ""))
+        if custom_jvm_params: jvm_params_list.extend(custom_jvm_params)  # 添加自定义Jvm
 
         version_json = json.loads(version_json.read_text("utf-8"))
 
@@ -121,8 +126,11 @@ class ECLauncherCore:
                     if type(arguments_game) is not str: continue
                     jvm_params_list.append(arguments_game.replace(" ", ""))
         elif "minecraftArguments" in version_json:
-            jvm_params_list.append("-Djava.library.path=${natives_directory} -cp ${classpath}")
-            jvm_params_list.append(version_json["minecraftArguments"])
+            jvm_params_list.extend([
+                "-Djava.library.path=${natives_directory}",
+                "-cp ${classpath}",
+                version_json["minecraftArguments"]
+            ])
 
         if window_width != "${resolution_width}" != window_height:
             jvm_params_list.append(f"--width {window_width} --height {window_height}")
@@ -168,8 +176,11 @@ class ECLauncherCore:
                         if arguments_game in jvm_params_list: continue  # 防止重复添加
                         jvm_params_list.append(arguments_game)
             elif "minecraftArguments" not in version_json and "minecraftArguments" in version_jar:
-                jvm_params_list.append("-Djava.library.path=${natives_directory} -cp ${classpath}")
-                jvm_params_list.append(game_json["minecraftArguments"])
+                jvm_params_list.extend([
+                    "-Djava.library.path=${natives_directory}",
+                    "-cp ${classpath}",
+                    version_json["minecraftArguments"]
+                ])
 
             for libraries in game_json["libraries"]:  # 遍历依赖
                 libraries_path = game_path / "libraries" / C_Libs.name_to_path(libraries["name"])
@@ -253,7 +264,7 @@ class ECLauncherCore:
             ,
             "${version_name}",
             f'"{version_name}"'  # 版本名字
-        ).replace("${version_name}", version_name)  # NeoForged的占位符,替换为游戏版本名称
+        ).replace("${version_name}", version_name)  # 特殊处理占位符,替换为游戏版本名称
 
         if write_run_script:
             run_script_path = Path(run_script_path) / f"run{run_script_suffix}"
@@ -263,7 +274,7 @@ class ECLauncherCore:
             self.output_launcher_log("输出启动参数")
             self.output_jvm_params(jvm_params)
         else:
-            self.output_launcher_log("正在启动游戏...")
+            self.output_launcher_log(f"正在启动游戏 [{version_name}]")
             instance_info = {
                 "Name": version_name,
                 "ID": uuid4().hex,
@@ -271,10 +282,12 @@ class ECLauncherCore:
                 "StdIn": False,
                 "Instance": subprocess.Popen(
                     jvm_params,
+                    cwd=(game_path / "versions" / version_name),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     start_new_session=True,
                     text=True,
+                    encoding="utf-8",
                     errors="ignore"
                 )  # 启动游戏
             }

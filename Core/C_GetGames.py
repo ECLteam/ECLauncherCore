@@ -7,14 +7,10 @@ import json
 
 class GetGames:
     def __init__(self, files_checker: C_FilesChecker.FilesChecker | None = None):
-        self.files_checker = files_checker if files_checker else C_FilesChecker.FilesChecker()
-        self.output_log = self.__default_output_log
+        self.files_checker = files_checker or C_FilesChecker.FilesChecker()
+        self.output_log: Callable[[str], None] = print
 
-    @staticmethod
-    def __default_output_log(log: str):
-        print(log)
-
-    def set_output_log(self, output_function: Callable[[str, bool], None]) -> None:
+    def set_output_log(self, output_function: Callable[[str], None]) -> None:
         self.output_log = output_function
 
     def set_api_url(self, api_url_dict: dict):
@@ -82,6 +78,7 @@ class GetGames:
                 "VanillaType": get_version_info["type"]
             }
         })
+        versions_info_path.write_text(json.dumps(versions_info, ensure_ascii=False, indent=4), encoding="utf-8")
         if download_file:
             self.files_checker.check_files(game_path, save_version_name, download_max_thread)
         return True
@@ -141,6 +138,7 @@ class GetGames:
                 "VanillaVersion": game_version_id
             }
         })
+        versions_info_path.write_text(json.dumps(versions_info, ensure_ascii=False, indent=4), encoding="utf-8")
         if download_vanilla:
             self.download_minecraft(game_path, game_version_id, False, download_max_thread, None, get_versions)
         self.files_checker.check_files(game_path, save_version_name, download_max_thread)
