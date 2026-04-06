@@ -699,6 +699,20 @@ class MultiAccountMinecraftAuth:
         """强制刷新指定账户的皮肤（重新下载）"""
         return self.download_skin(account_alias, force_refresh=True)
 
+    def get_skin_path(self, account_alias: str) -> Optional[Path]:
+        """获取指定账户的皮肤本地路径，如果缓存不存在则尝试下载"""
+        self._ensure_initialized()
+        for account in self.accounts.values():
+            if account.alias == account_alias:
+                cache_path = self._get_skin_cache_path(account)
+                if cache_path.exists():
+                    return cache_path
+                else:
+                    # 尝试下载（force_refresh=False 会使用已有的 skin_url）
+                    return self.download_skin(account_alias, force_refresh=False)
+        self._log(f"❌ 未找到账户: {account_alias}")
+        return None
+
     # ==================== 公共接口方法 ====================
     def add_account(self) -> bool:
         """添加新账户（交互式）"""
@@ -751,9 +765,15 @@ class MultiAccountMinecraftAuth:
         if len(self.accounts) == 1:
             self._set_current_account(account)
 
+        # 自动下载皮肤
+        self._log(f"正在自动下载账户 '{alias}' 的皮肤...")
+        skin_path = self.download_skin(alias, force_refresh=True)
+        if skin_path:
+            self._log(f"✅ 皮肤已缓存至: {skin_path}")
+        else:
+            self._log("⚠️ 皮肤下载失败，可稍后手动刷新")
+
         self._log(f"✅ 账户 '{alias}' 添加成功！")
-        # 可选：自动下载皮肤
-        # self.download_skin(alias)
         return True
 
     def list_accounts(self) -> list | None:
@@ -861,7 +881,7 @@ class MultiAccountMinecraftAuth:
         return mc_token
 
     def refresh_account_profile(self, account_alias: str) -> bool:
-        """刷新指定账户的档案信息（包括皮肤 URL）"""
+        """刷新指定账户的档案信息（包括皮肤 URL）并自动刷新皮肤"""
         self._ensure_initialized()
 
         for account in self.accounts.values():
@@ -895,6 +915,15 @@ class MultiAccountMinecraftAuth:
                 account.alias = profile['name']
 
             self._save_accounts()
+
+            # 自动刷新皮肤
+            self._log(f"正在自动刷新账户 '{account.alias}' 的皮肤...")
+            skin_path = self.download_skin(account.alias, force_refresh=True)
+            if skin_path:
+                self._log(f"✅ 皮肤已更新至: {skin_path}")
+            else:
+                self._log("⚠️ 皮肤更新失败")
+
             self._log(f"✅ {old_alias} 档案已更新")
             return True
 
@@ -971,7 +1000,7 @@ class MultiAccountMinecraftAuth:
             refresh: 是否实时刷新（重新认证）获取最新档案，默认为 False
 
         Returns:
-            档案字典，包含 name, id 等字段，如果无当前账户则返回 None
+            档案字典，包含 name, id, skin_url, skin_cache_path 等字段，如果无当前账户则返回 None
         """
         self._ensure_initialized()
 
@@ -982,11 +1011,19 @@ class MultiAccountMinecraftAuth:
         if refresh:
             # 刷新档案（重新认证）
             if self.refresh_account_profile(self.current_account.alias):
-                return self.current_account.profile
+                return {
+                    "profile": self.current_account.profile,
+                    "skin_url": self.current_account.skin_url,
+                    "skin_cache_path": self.current_account.skin_cache_path
+                }
             else:
                 return None
         else:
-            return self.current_account.profile
+            return {
+                "profile": self.current_account.profile,
+                "skin_url": self.current_account.skin_url,
+                "skin_cache_path": self.current_account.skin_cache_path
+            }
 
     def get_all_accounts_profiles(self, refresh: bool = False) -> Dict[str, dict]:
         """获取所有账户的档案信息
@@ -995,7 +1032,7 @@ class MultiAccountMinecraftAuth:
             refresh: 是否实时刷新（重新认证）获取最新档案，默认为 False
 
         Returns:
-            字典，键为账户别名，值为档案字典
+            字典，键为账户别名，值为档案字典（包含 profile, skin_url, skin_cache_path）
         """
         self._ensure_initialized()
 
@@ -1005,7 +1042,11 @@ class MultiAccountMinecraftAuth:
             self.refresh_all_account_profiles()
 
         for alias, account in self.accounts.items():
-            profiles[alias] = account.profile
+            profiles[alias] = {
+                "profile": account.profile,
+                "skin_url": account.skin_url,
+                "skin_cache_path": account.skin_cache_path
+            }
         return profiles
 
 
@@ -1034,10 +1075,10 @@ def main() -> None:
         print("6. 刷新所有账户档案")
         print("7. 刷新指定账户档案")
         print("8. 更改主密码")
-        print("9. 获取当前账户档案")
-        print("10. 获取所有账户档案")
-        print("11. 下载当前账户皮肤")
-        print("12. 刷新当前账户皮肤")
+        print("9. 获取当前账户档案（含皮肤信息）")
+        print("10. 获取所有账户档案（含皮肤信息）")
+        print("11. 手动下载当前账户皮肤")
+        print("12. 手动刷新当前账户皮肤")
         print("13. 退出")
 
         choice = input("\n请选择操作 (1-13): ").strip()
@@ -1098,19 +1139,25 @@ def main() -> None:
                 break
             auth.change_master_password(new_password)
         elif choice == "9":
-            profile = auth.get_current_account_profile(refresh=False)
-            if profile:
+            profile_info = auth.get_current_account_profile(refresh=False)
+            if profile_info:
                 print(f"\n📄 当前账户档案:")
-                print(f"   玩家名称: {profile['name']}")
-                print(f"   玩家 UUID: {profile['id']}")
+                print(f"   玩家名称: {profile_info['profile']['name']}")
+                print(f"   玩家 UUID: {profile_info['profile']['id']}")
+                print(f"   皮肤 URL: {profile_info['skin_url']}")
+                print(f"   皮肤缓存路径: {profile_info['skin_cache_path'] or '未缓存'}")
             else:
                 print("❌ 当前无账户或获取失败")
         elif choice == "10":
             profiles = auth.get_all_accounts_profiles(refresh=False)
             if profiles:
                 print("\n📄 所有账户档案:")
-                for alias, prof in profiles.items():
-                    print(f"   {alias}: {prof['name']} (UUID: {prof['id']})")
+                for alias, info in profiles.items():
+                    print(f"   {alias}:")
+                    print(f"      玩家名称: {info['profile']['name']}")
+                    print(f"      玩家 UUID: {info['profile']['id']}")
+                    print(f"      皮肤 URL: {info['skin_url']}")
+                    print(f"      皮肤缓存路径: {info['skin_cache_path'] or '未缓存'}")
             else:
                 print("❌ 无已保存的账户")
         elif choice == "11":
