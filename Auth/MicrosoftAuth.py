@@ -22,6 +22,8 @@ class MinecraftAccount:
     email: str
     profile: dict
     cache_file: str
+    skin_url: str = ""          # 皮肤 URL
+    skin_cache_path: str = ""   # 本地缓存路径
 
     def to_dict(self) -> dict:
         """转换为字典格式"""
@@ -30,7 +32,9 @@ class MinecraftAccount:
             "account_id": self.account_id,
             "email": self.email,
             "profile": self.profile,
-            "cache_file": self.cache_file
+            "cache_file": self.cache_file,
+            "skin_url": self.skin_url,
+            "skin_cache_path": self.skin_cache_path,
         }
 
     @classmethod
@@ -41,7 +45,9 @@ class MinecraftAccount:
             account_id=data["account_id"],
             email=data["email"],
             profile=data["profile"],
-            cache_file=data["cache_file"]
+            cache_file=data["cache_file"],
+            skin_url=data.get("skin_url", ""),
+            skin_cache_path=data.get("skin_cache_path", ""),
         )
 
 
@@ -604,8 +610,8 @@ class MultiAccountMinecraftAuth:
             self._login_log_callback(f"获取 Minecraft 令牌失败: {e}")
             return None
 
-    def _check_minecraft_ownership(self, mc_access_token: str) -> Tuple[bool, Optional[dict]]:
-        """验证 Minecraft 所有权并获取玩家档案"""
+    def _check_minecraft_ownership(self, mc_access_token: str) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """验证 Minecraft 所有权并获取玩家档案和皮肤 URL"""
         profile_url = "https://api.minecraftservices.com/minecraft/profile"
         headers = {"Authorization": f"Bearer {mc_access_token}"}
 
@@ -614,19 +620,84 @@ class MultiAccountMinecraftAuth:
 
             if resp.status_code == 200:
                 profile = resp.json()
+                # 解析皮肤 URL
+                skin_url = ""
+                if "skins" in profile and profile["skins"]:
+                    skin_url = profile["skins"][0].get("url", "")
                 self._login_log_callback(f"🎉 Minecraft 所有权验证成功！")
                 self._login_log_callback(f"   玩家名称: {profile['name']}")
                 self._login_log_callback(f"   玩家 UUID: {profile['id']}")
-                return True, profile
+                if skin_url:
+                    self._login_log_callback(f"   皮肤 URL: {skin_url}")
+                return True, profile, skin_url
             elif resp.status_code == 404:
                 self._login_log_callback("❌ 该账户未购买 Minecraft Java 版")
-                return False, None
+                return False, None, None
             else:
                 self._login_log_callback(f"⚠️ 检查 Minecraft 所有权时出错: {resp.status_code} - {resp.text}")
-                return False, None
+                return False, None, None
         except Exception as e:
             self._login_log_callback(f"检查 Minecraft 所有权失败: {e}")
-            return False, None
+            return False, None, None
+
+    # ==================== 皮肤缓存方法 ====================
+    def _get_skin_cache_path(self, account: MinecraftAccount) -> Path:
+        """生成皮肤缓存文件路径（明文 PNG）"""
+        skin_dir = self.data_dir / "skins"
+        skin_dir.mkdir(exist_ok=True)
+        # 使用 account_id 作为文件名，确保唯一性
+        return skin_dir / f"{account.account_id}.png"
+
+    def download_skin(self, account_alias: str, force_refresh: bool = False) -> Optional[Path]:
+        """下载并缓存指定账户的皮肤，返回本地路径（明文 PNG）"""
+        self._ensure_initialized()
+        account = None
+        for acc in self.accounts.values():
+            if acc.alias == account_alias:
+                account = acc
+                break
+        if not account:
+            self._log(f"❌ 未找到账户: {account_alias}")
+            return None
+
+        cache_path = self._get_skin_cache_path(account)
+        if not force_refresh and cache_path.exists():
+            self._log(f"✅ 皮肤已缓存: {cache_path}")
+            return cache_path
+
+        if not account.skin_url:
+            # 如果没有保存 skin_url，尝试刷新账户档案以获取最新皮肤 URL
+            self._log("账户未保存皮肤 URL，尝试刷新档案...")
+            if not self.refresh_account_profile(account_alias):
+                return None
+            # 刷新后重新获取 account 对象
+            account = self.accounts.get(account.account_id)
+            if not account or not account.skin_url:
+                self._log("❌ 无法获取皮肤 URL")
+                return None
+
+        # 下载皮肤
+        try:
+            resp = requests.get(account.skin_url, stream=True)
+            if resp.status_code == 200:
+                with open(cache_path, 'wb') as f:
+                    for chunk in resp.iter_content(1024):
+                        f.write(chunk)
+                self._log(f"✅ 皮肤已下载: {cache_path}")
+                # 更新缓存路径到 account 对象
+                account.skin_cache_path = str(cache_path)
+                self._save_accounts()
+                return cache_path
+            else:
+                self._log(f"❌ 下载皮肤失败: HTTP {resp.status_code}")
+                return None
+        except Exception as e:
+            self._log(f"❌ 下载皮肤异常: {e}")
+            return None
+
+    def refresh_skin(self, account_alias: str) -> Optional[Path]:
+        """强制刷新指定账户的皮肤（重新下载）"""
+        return self.download_skin(account_alias, force_refresh=True)
 
     # ==================== 公共接口方法 ====================
     def add_account(self) -> bool:
@@ -650,8 +721,8 @@ class MultiAccountMinecraftAuth:
         if not mc_token:
             return False
 
-        # 4. 验证所有权并获取档案
-        has_minecraft, profile = self._check_minecraft_ownership(mc_token)
+        # 4. 验证所有权并获取档案和皮肤 URL
+        has_minecraft, profile, skin_url = self._check_minecraft_ownership(mc_token)
         if not has_minecraft:
             # 移除临时缓存
             cache_path = self.data_dir / "cache" / f"{cache_file}.bin"
@@ -669,7 +740,9 @@ class MultiAccountMinecraftAuth:
             account_id=account_id,
             email=email or "未知",
             profile=profile,
-            cache_file=cache_file
+            cache_file=cache_file,
+            skin_url=skin_url,
+            skin_cache_path=""  # 稍后下载皮肤时再填充
         )
 
         self.accounts[account_id] = account
@@ -679,6 +752,8 @@ class MultiAccountMinecraftAuth:
             self._set_current_account(account)
 
         self._log(f"✅ 账户 '{alias}' 添加成功！")
+        # 可选：自动下载皮肤
+        # self.download_skin(alias)
         return True
 
     def list_accounts(self) -> list | None:
@@ -724,10 +799,13 @@ class MultiAccountMinecraftAuth:
             self._log(f"❌ 未找到账户: {account_alias}")
             return False
 
-        # 删除缓存文件
+        # 删除缓存文件（令牌缓存和皮肤缓存）
         cache_path = self.data_dir / "cache" / f"{target_account.cache_file}.bin"
         if cache_path.exists():
             cache_path.unlink()
+        skin_path = self._get_skin_cache_path(target_account)
+        if skin_path.exists():
+            skin_path.unlink()
 
         del self.accounts[target_id]
         self._save_accounts()
@@ -767,7 +845,7 @@ class MultiAccountMinecraftAuth:
             return None
 
         # 验证并更新档案
-        is_valid, profile = self._check_minecraft_ownership(mc_token)
+        is_valid, profile, skin_url = self._check_minecraft_ownership(mc_token)
         if not is_valid:
             self._login_log_callback("❌ Minecraft 令牌验证失败")
             return None
@@ -777,12 +855,13 @@ class MultiAccountMinecraftAuth:
             self._log(f"检测到玩家 ID 变化: {self.current_account.alias} -> {profile['name']}")
             self.current_account.alias = profile['name']
             self.current_account.profile = profile
+            self.current_account.skin_url = skin_url
             self._save_accounts()
 
         return mc_token
 
     def refresh_account_profile(self, account_alias: str) -> bool:
-        """刷新指定账户的档案信息"""
+        """刷新指定账户的档案信息（包括皮肤 URL）"""
         self._ensure_initialized()
 
         for account in self.accounts.values():
@@ -804,12 +883,13 @@ class MultiAccountMinecraftAuth:
             if not mc_token:
                 return False
 
-            is_valid, profile = self._check_minecraft_ownership(mc_token)
+            is_valid, profile, skin_url = self._check_minecraft_ownership(mc_token)
             if not is_valid:
                 return False
 
             old_alias = account.alias
             account.profile = profile
+            account.skin_url = skin_url
             if profile['name'] != old_alias:
                 self._log(f"更新账户别名: {old_alias} -> {profile['name']}")
                 account.alias = profile['name']
@@ -883,7 +963,7 @@ class MultiAccountMinecraftAuth:
         self._log(f"✅ 主密码更改完成，成功重新加密 {success}/{total} 个账户")
         return True
 
-    # ==================== 新增：获取档案信息 ====================
+    # ==================== 获取档案信息 ====================
     def get_current_account_profile(self, refresh: bool = False) -> Optional[dict]:
         """获取当前账户的档案信息
 
@@ -956,9 +1036,11 @@ def main() -> None:
         print("8. 更改主密码")
         print("9. 获取当前账户档案")
         print("10. 获取所有账户档案")
-        print("11. 退出")
+        print("11. 下载当前账户皮肤")
+        print("12. 刷新当前账户皮肤")
+        print("13. 退出")
 
-        choice = input("\n请选择操作 (1-11): ").strip()
+        choice = input("\n请选择操作 (1-13): ").strip()
 
         def list_accounts():
             accounts_list = auth.list_accounts()
@@ -1032,6 +1114,24 @@ def main() -> None:
             else:
                 print("❌ 无已保存的账户")
         elif choice == "11":
+            if auth.current_account:
+                path = auth.download_skin(auth.current_account.alias, force_refresh=False)
+                if path:
+                    print(f"✅ 皮肤已保存至: {path}")
+                else:
+                    print("❌ 皮肤下载失败")
+            else:
+                print("❌ 未选择任何账户")
+        elif choice == "12":
+            if auth.current_account:
+                path = auth.refresh_skin(auth.current_account.alias)
+                if path:
+                    print(f"✅ 皮肤已刷新并保存至: {path}")
+                else:
+                    print("❌ 皮肤刷新失败")
+            else:
+                print("❌ 未选择任何账户")
+        elif choice == "13":
             print("再见！")
             break
         else:
