@@ -1,4 +1,4 @@
-from . import C_Libs, C_Downloader, C_FilesChecker
+from . import C_Libs, C_Downloader, C_FilesChecker, InstancesManager
 from typing import Callable
 from shutil import rmtree
 from pathlib import Path
@@ -12,16 +12,21 @@ import re
 class ECLauncherCore:
     def __init__(self):
         self.output_launcher_log: Callable[[str], None] = print
-        self.output_minecraft_instance: Callable[[dict[str, str | bool | subprocess.Popen]], None] = print
         self.output_jvm_params: Callable[[str], None] = print
 
         self.api_url = C_Libs.ApiUrl()
         self.downloader = C_Downloader.Downloader()
         self.files_checker = C_FilesChecker.FilesChecker(self.api_url, self.downloader)
+        self.instances_manager = InstancesManager.InstancesManager()
 
         self.system_type = platform.system()  # 获取系统类型
 
-        self.instances: list[dict[str, str | bool | subprocess.Popen]] = []  # 实例列表, 需外部手动管理(这个list只加不减💦)
+    def set_api_url(self, api_url_dict: dict):  # 等价于 api_url.update_from_dict
+        self.api_url.update_from_dict(api_url_dict)
+
+    def set_output_launcher_log(self, output_function: Callable[[str], None]) -> None:
+        self.output_launcher_log = output_function
+
         """
         {
             "Name": "Name",  # 实例名称
@@ -31,15 +36,6 @@ class ECLauncherCore:
             "Instance": subprocess.Popen  # 进程管道实例
         }
         """
-
-    def set_api_url(self, api_url_dict: dict):  # 等价于 api_url.update_from_dict
-        self.api_url.update_from_dict(api_url_dict)
-
-    def set_output_launcher_log(self, output_function: Callable[[str], None]) -> None:
-        self.output_launcher_log = output_function
-
-    def set_output_minecraft_instance(self, output_function: Callable[[dict[str, str | bool | subprocess.Popen]], None]) -> None:
-        self.output_minecraft_instance = output_function
 
     def set_output_jvm_params(self, output_function: Callable[[str], None]) -> None:
         self.output_jvm_params = output_function
@@ -275,21 +271,10 @@ class ECLauncherCore:
             self.output_jvm_params(jvm_params)
         else:
             self.output_launcher_log(f"正在启动游戏 [{version_name}]")
-            instance_info = {
-                "Name": version_name,
-                "ID": uuid4().hex,
-                "Type": "MinecraftClient",
-                "StdIn": False,
-                "Instance": subprocess.Popen(
-                    jvm_params,
-                    cwd=(game_path / "versions" / version_name),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    start_new_session=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="ignore"
-                )  # 启动游戏
-            }
-            self.instances.append(instance_info)
-            self.output_minecraft_instance(instance_info)
+            self.instances_manager.create_instance(
+                instance_name=version_name,
+                instance_type="MinecraftClient",
+                args=jvm_params,
+                cwd=(game_path / "versions" / version_name),
+                only_stdout=True
+            )  # 启动游戏
