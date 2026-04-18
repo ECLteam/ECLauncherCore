@@ -1052,7 +1052,7 @@ class MultiAccountMinecraftAuth:
 
 def main() -> None:
     """主菜单循环"""
-    client_id = "f1709935-df0b-400c-843a-530a77fb8d3c"
+    client_id = ""
     auth = MultiAccountMinecraftAuth(client_id)
 
     # 可以自定义日志回调（这里使用默认print）
