@@ -1,0 +1,548 @@
+from typing import Callable
+from pathlib import Path
+import threading
+import asyncio
+import queue
+import httpx
+import time
+
+
+class DynamicSemaphore:
+    """
+    可动态调整上限的异步信号量。
+
+    用于控制并发协程数量，支持运行时修改上限值（change 方法）。
+    内部使用 asyncio.Condition 实现等待/通知机制，线程安全。
+
+    方法：
+        acquire(): 获取一个许可，若当前许可数为 0 则阻塞等待。
+        release(): 释放一个许可，唤醒一个等待者。
+        change(new_value): 动态调整许可总数，若增大则立即唤醒等待任务。
+    """
+    def __init__(self, value: int):
+        self._value = value
+        self._condition = asyncio.Condition()
+
+    async def acquire(self):
+        """获取一个许可，若无可用则阻塞。"""
+        async with self._condition:
+            while self._value <= 0:
+                await self._condition.wait()
+            self._value -= 1
+
+    def release(self):
+        """释放一个许可，唤醒一个等待者（异步触发）。"""
+        async def _release():
+            async with self._condition:
+                self._value += 1
+                self._condition.notify()
+        asyncio.create_task(_release())
+
+    def change(self, new_value: int):
+        """动态调整许可总数。若增大，则唤醒阻塞的等待任务。"""
+        async def _change():
+            async with self._condition:
+                delta = new_value - self._value
+                if delta > 0:
+                    self._value = new_value
+                    self._condition.notify_all()
+                else:
+                    self._value = new_value
+        asyncio.create_task(_change())
+
+    @property
+    def value(self) -> int:
+        return self._value
+
+
+class RateLimiter:
+    """
+    基于固定时间窗口的令牌桶限速器。
+
+    通过限制每个时间窗口内通过的字节数来控制下载速度。
+    窗口大小默认为 0.1 秒，通过 acquire(bytes_to_send) 请求允许发送指定字节数，
+    若窗口内累计字节超过阈值，则等待至下一窗口。
+
+    属性：
+        speed_limit_bytes: 每秒允许的最大字节数（0 表示不限速）。
+        window: 时间窗口长度（秒）。
+    """
+    def __init__(self, speed_limit_mb: float, window: float = 0.1):
+        self.speed_limit_bytes = speed_limit_mb * 1024 * 1024
+        self.window = window
+        self.max_bytes_per_window = self.speed_limit_bytes * window
+        self.current_window_bytes = 0
+        self.window_start = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, bytes_to_send: int):
+        """
+        请求允许发送 bytes_to_send 字节。
+        若当前窗口内累计字节超过限制，则等待至下一窗口。
+        """
+        if self.speed_limit_bytes == 0:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.window_start
+            if elapsed >= self.window:
+                self.window_start = now
+                self.current_window_bytes = 0
+            else:
+                if self.current_window_bytes + bytes_to_send > self.max_bytes_per_window:
+                    wait_time = self.window - elapsed
+                    await asyncio.sleep(wait_time)
+                    self.window_start = time.monotonic()
+                    self.current_window_bytes = 0
+            self.current_window_bytes += bytes_to_send
+
+
+class Downloader:
+    def __init__(
+        self,
+        download_list: list[tuple[str, Path | str]],
+        speed_limit_mb: float = 0.0,
+        progress_callback: Callable[[int, int], None] | None = None,
+        speed_callback: Callable[[float], None] | None = None,
+        max_rounds: int = 3,
+        skip_preflight: bool = False
+    ):
+        """
+        初始化下载器。
+
+        :param download_list: 下载任务列表，每个元素为 (url, path) 元组。
+                               path 可以是字符串或 pathlib.Path 对象，将自动转换。
+        :param speed_limit_mb: 全局速度限制（MB/s）。设为 0 表示不限速。
+                               限速模式下并发数固定为 200，不限速模式下使用自适应并发（初始 80，动态调节）。
+        :param progress_callback: 进度回调函数，签名为 (downloaded: int, total: int) -> None。
+                                  当下载进度更新时被调用。若所有文件能获取大小，则 downloaded 为已下载字节数，total 为总字节数；
+                                  否则 downloaded 为已完成文件数，total 为总文件数。
+        :param speed_callback: 速度回调函数，签名为 (speed_mb_per_sec: float) -> None。
+                               每秒调用一次，报告当前实时下载速度（MB/s）。
+        :param max_rounds: 最大重试轮数。每轮尝试下载所有未完成文件，失败的文件进入下一轮。
+                           默认 3 轮，设为 0 表示不重试。
+        :param skip_preflight: 是否跳过总文件大小预检查，若跳过则直接使用文件计数模式。
+        """
+        # 统一路径类型
+        self.original_downloads: list[tuple[str, Path]] = []
+        for url, path in download_list:
+            if not isinstance(path, Path):
+                path = Path(path)
+            self.original_downloads.append((url, path))
+
+        self.speed_limit_mb = speed_limit_mb
+        self.progress_callback = progress_callback or (lambda *args: None)
+        self.speed_callback = speed_callback or (lambda *args: None)
+        self.max_rounds = max_rounds
+        self.skip_preflight = skip_preflight
+
+        # 状态存储
+        self.completed_entries: set[tuple[str, str]] = set()
+        self.failed_entries: set[tuple[str, str]] = set()
+        self.pending_entries: list[tuple[str, Path, int | None]] = []
+
+        # 进度相关
+        self.total_bytes = 0          # 字节模式下为总字节数，文件模式下为总文件数
+        self.downloaded_bytes = 0     # 字节模式下为已下载字节，文件模式下为已完成文件数
+        self.total_files = 0          # 总文件数（两种模式均有效）
+        self.use_byte_progress = True # 预检后决定
+        self.bytes_downloaded_for_speed = 0  # 独立字节计数器，用于速度计算
+
+        # 并发控制
+        self.concurrency = 80 if speed_limit_mb == 0 else 200
+        self.semaphore = DynamicSemaphore(self.concurrency)
+        self.rate_limiter = RateLimiter(speed_limit_mb)
+
+        self.loop = asyncio.get_running_loop() if asyncio._get_running_loop() else None
+        self.pause_event = asyncio.Event()
+        self.pause_event.set()  # 默认运行
+
+        # 事件队列（异步 -> 同步）
+        self.async_event_queue: asyncio.Queue = asyncio.Queue()
+        self.sync_event_queue: queue.Queue = queue.Queue()
+        self._dispatcher_thread: threading.Thread | None = None
+        self._stop_dispatcher = threading.Event()
+
+        self.client: httpx.AsyncClient | None = None
+
+        # 速度统计
+        self._last_downloaded = 0
+        self._last_speed_time = time.monotonic()
+
+    # ---------- 辅助方法 ----------
+    def _is_entry_completed(self, url: str, path: Path) -> bool:
+        return (url, str(path)) in self.completed_entries
+
+    def _is_entry_failed(self, url: str, path: Path) -> bool:
+        return (url, str(path)) in self.failed_entries
+
+    def _mark_completed(self, url: str, path: Path):
+        entry = (url, str(path))
+        if entry not in self.completed_entries:
+            self.completed_entries.add(entry)
+
+    def _mark_failed(self, url: str, path: Path):
+        entry = (url, str(path))
+        self.failed_entries.add(entry)
+
+    @staticmethod
+    async def _head_one(client, url, path):
+        """发送 HEAD 请求并返回 (url, path, content_length)，若失败则抛出异常。"""
+        resp = await client.head(url)
+        resp.raise_for_status()
+        size = int(resp.headers.get("content-length", 0))
+        return url, path, size
+
+    # ---------- 预检 ----------
+    async def _preflight(self):
+        """
+        预检所有文件，尝试获取 Content-Length。
+        若全部成功且大小 > 0，使用字节进度模式；
+        否则切换到文件计数模式，并保留已成功 HEAD 的结果（但后续进度按文件数走）。
+        """
+        total_files = len(self.original_downloads)
+        self.total_files = total_files
+
+        # 收集待检查的条目
+        to_check = []
+        for url, path in self.original_downloads:
+            if self._is_entry_completed(url, path) or self._is_entry_failed(url, path):
+                continue
+            to_check.append((url, path))
+
+        if not to_check:
+            self.pending_entries = []
+            return
+
+        async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
+            # 创建所有 HEAD 任务
+            tasks = {}
+            for url, path in to_check:
+                task = asyncio.create_task(self._head_one(client, url, path))
+                tasks[task] = (url, path)
+
+            # 等待所有任务完成，收集结果
+            results = await asyncio.gather(*tasks.keys(), return_exceptions=True)
+
+            all_ok = True
+            sizes = {}
+            for res in results:
+                if isinstance(res, Exception):
+                    all_ok = False
+                else:
+                    url, path, size = res
+                    sizes[(url, str(path))] = size
+                    if size <= 0:
+                        all_ok = False
+
+        # 构建待下载列表
+        self.pending_entries = []
+        for url, path in self.original_downloads:
+            if self._is_entry_completed(url, path) or self._is_entry_failed(url, path):
+                continue
+            key = (url, str(path))
+            size = sizes.get(key, 0)
+            # 若全部成功且所有大小 > 0，使用字节模式，并记录大小；否则使用文件模式，大小置 None
+            if all_ok and all(s > 0 for s in sizes.values()):
+                self.pending_entries.append((url, path, size))
+            else:
+                self.pending_entries.append((url, path, None))
+
+        # 决定进度模式
+        if all_ok and all(s > 0 for s in sizes.values()):
+            self.use_byte_progress = True
+            self.total_bytes = sum(sizes.values())
+        else:
+            self.use_byte_progress = False
+            self.total_bytes = total_files  # 此时 total_bytes 代表总文件数
+
+    # ---------- 单次下载 ----------
+    async def _download_file_once(self, url: str, path: Path, size_known: int | None) -> bool:
+        """
+        下载单个文件，成功返回 True，失败返回 False。
+        若文件已存在且大小匹配（size_known 非 None），则跳过并视为成功。
+        """
+        # 如果文件已存在且大小匹配，直接标记完成（并更新文件计数进度）
+        if size_known is not None and path.exists() and path.stat().st_size == size_known:
+            self._mark_completed(url, path)
+            if not self.use_byte_progress:
+                self.downloaded_bytes += 1
+                self._put_event("progress", self.downloaded_bytes, self.total_bytes)
+            return True
+
+        try:
+            await self.semaphore.acquire()
+            await self.pause_event.wait()
+
+            chunk_size = 1 * 1024 * 1024  # 1MB
+            async with self.client.stream("GET", url, timeout=30.0) as response:
+                response.raise_for_status()
+                content_length = response.headers.get("content-length")
+                real_size = int(content_length) if content_length is not None else 0
+
+                # 若处于字节模式且大小发生变化，更新 total_bytes
+                if self.use_byte_progress:
+                    if size_known is None or real_size != size_known:
+                        if size_known is None:
+                            self.total_bytes += real_size
+                        else:
+                            self.total_bytes += real_size - size_known
+
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path = path.with_suffix(path.suffix + ".tmp")
+                with open(temp_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size):
+                        await self.pause_event.wait()
+                        await self.rate_limiter.acquire(len(chunk))
+                        f.write(chunk)
+                        # 速度计数器始终累加实际字节数
+                        self.bytes_downloaded_for_speed += len(chunk)
+                        # 进度更新（字节模式）
+                        if self.use_byte_progress:
+                            self.downloaded_bytes += len(chunk)
+                            progress = min(self.downloaded_bytes, self.total_bytes) if self.total_bytes > 0 else 0
+                            self._put_event("progress", progress, self.total_bytes)
+                temp_path.replace(path)
+
+            # 验证文件大小（若 real_size > 0）
+            final_size = path.stat().st_size
+            if 0 < real_size != final_size:
+                path.unlink(missing_ok=True)
+                return False
+
+            self._mark_completed(url, path)
+            # 文件计数模式：增加已完成文件数并触发进度
+            if not self.use_byte_progress:
+                self.downloaded_bytes += 1
+                self._put_event("progress", self.downloaded_bytes, self.total_bytes)
+            return True
+        except Exception:
+            return False
+        finally:
+            self.semaphore.release()
+
+    # ---------- 事件处理 ----------
+    def _put_event(self, event_type: str, *args):
+        """将事件放入异步队列（非阻塞）"""
+        asyncio.create_task(self.async_event_queue.put((event_type, args)))
+
+    async def _event_collector(self):
+        """将异步队列中的事件转移到同步队列，供回调线程消费"""
+        while True:
+            item = await self.async_event_queue.get()
+            if item is None:
+                break
+            self.sync_event_queue.put(item)
+
+    def _dispatcher(self):
+        """在独立线程中串行执行用户回调，保证线程安全"""
+        while not self._stop_dispatcher.is_set():
+            try:
+                item = self.sync_event_queue.get(timeout=0.1)
+            except:
+                continue
+            if item is None:
+                break
+            event_type, args = item
+            if event_type == "progress":
+                self.progress_callback(*args)
+            elif event_type == "speed":
+                self.speed_callback(*args)
+
+    async def _speed_calculator(self):
+        """每秒计算一次实时下载速度（基于独立字节计数器）"""
+        while True:
+            await asyncio.sleep(1.0)
+            now = time.monotonic()
+            delta = now - self._last_speed_time
+            if delta > 0:
+                current = self.bytes_downloaded_for_speed
+                speed = (current - self._last_downloaded) / delta / (1024 * 1024)
+                self._last_downloaded = current
+                self._last_speed_time = now
+                self._put_event("speed", speed)
+
+    async def _adaptive_concurrency(self):
+        """不限速时，根据错误率动态调节并发数（AIMD 算法）"""
+        while True:
+            await asyncio.sleep(2.0)
+            if self.failed_entries:
+                new_concurrency = max(10, int(self.concurrency * 0.8))
+            else:
+                new_concurrency = min(500, self.concurrency + 5)
+            if new_concurrency != self.concurrency:
+                self.concurrency = new_concurrency
+                self.semaphore.change(new_concurrency)
+
+    # ---------- 主运行 ----------
+    async def run(self):
+        """
+        启动下载任务，直到所有文件下载完成或达到最大重试轮数。
+
+        这是一个异步协程，需在事件循环中 await 调用。
+        下载过程会自动处理并发控制、限速、暂停/恢复状态，并在结束后清理资源。
+
+        :raises: 该方法会捕获内部异常并记录到失败列表，但不会向外抛出，
+                 所有异常都通过回调或日志体现。若需要外部感知，请检查 self.failed_entries。
+        """
+        if self.loop is None:
+            self.loop = asyncio.get_running_loop()
+
+        self.client = httpx.AsyncClient(http2=True, timeout=httpx.Timeout(30.0, connect=5.0))
+
+        # 预检或跳过预检
+        if self.skip_preflight:
+            # 直接使用文件计数模式
+            self.use_byte_progress = False
+            self.total_files = len(self.original_downloads)
+            self.total_bytes = self.total_files
+            self.pending_entries = []
+            for url, path in self.original_downloads:
+                if not self._is_entry_completed(url, path) and not self._is_entry_failed(url, path):
+                    self.pending_entries.append((url, path, None))
+            self.downloaded_bytes = len(self.completed_entries)
+        else:
+            await self._preflight()
+
+        # 若处于文件计数模式，从已完成状态恢复计数
+        if not self.use_byte_progress:
+            self.downloaded_bytes = len(self.completed_entries)
+
+        # 构建本轮待下载列表（排除已完成）
+        pending: list[tuple[str, Path, int | None]] = [
+            (url, path, size) for url, path, size in self.pending_entries
+            if not self._is_entry_completed(url, path)
+        ]
+
+        if not pending:
+            return
+
+        # 启动辅助协程和线程
+        collector_task = asyncio.create_task(self._event_collector())
+        speed_task = asyncio.create_task(self._speed_calculator())
+        self._stop_dispatcher.clear()
+        self._dispatcher_thread = threading.Thread(target=self._dispatcher, daemon=True)
+        self._dispatcher_thread.start()
+
+        adjuster_task = None
+        if self.speed_limit_mb == 0:
+            adjuster_task = asyncio.create_task(self._adaptive_concurrency())
+
+        # 轮次重试
+        round_num = 1
+        while pending and round_num <= self.max_rounds:
+            tasks = [asyncio.create_task(self._download_file_once(url, path, size))
+                     for url, path, size in pending]
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+
+            failed_this_round: list[tuple[str, Path, int | None]] = []
+            for i, success in enumerate(results):
+                if not success:
+                    url, path, size = pending[i]
+                    # 二次确认文件是否实际存在且完整
+                    if path.exists() and (size is None or path.stat().st_size == size):
+                        self._mark_completed(url, path)
+                        if not self.use_byte_progress:
+                            self.downloaded_bytes += 1
+                            self._put_event("progress", self.downloaded_bytes, self.total_bytes)
+                        continue
+                    failed_this_round.append(pending[i])
+
+            if not failed_this_round:
+                pending = []
+                break
+
+            pending = failed_this_round
+            round_num += 1
+            if round_num <= self.max_rounds:
+                wait_time = 2 ** (round_num - 1)  # 指数退避
+                await asyncio.sleep(wait_time)
+
+        # 剩余失败标记为永久失败
+        if pending:
+            for url, path, _ in pending:
+                self._mark_failed(url, path)
+
+        # ---------- 清理资源 ----------
+        if adjuster_task:
+            adjuster_task.cancel()
+            try:
+                await adjuster_task
+            except:
+                pass
+
+        # 确保暂停事件已设置，防止任务阻塞
+        self.pause_event.set()
+
+        # 停止事件收集
+        await self.async_event_queue.put(None)
+
+        # 取消速度计算任务
+        speed_task.cancel()
+        try:
+            await asyncio.gather(collector_task, speed_task, return_exceptions=True)
+        except:
+            pass
+
+        # 停止回调分发线程
+        self._stop_dispatcher.set()
+        if self._dispatcher_thread:
+            self._dispatcher_thread.join(timeout=2)
+
+        # 关闭 HTTP 客户端
+        await self.client.aclose()
+
+        # 发送最终进度
+        if self.use_byte_progress:
+            progress = min(self.downloaded_bytes, self.total_bytes) if self.total_bytes > 0 else 0
+            self._put_event("progress", progress, self.total_bytes)
+        else:
+            progress = min(self.downloaded_bytes, self.total_files)
+            self._put_event("progress", progress, self.total_files)
+        await asyncio.sleep(0.5)
+
+    # ---------- 暂停/恢复 ----------
+    def pause(self):
+        """
+        暂停所有正在进行的下载任务。
+
+        调用后，正在下载的任务会在下一个检查点（每次写入块之前）阻塞在暂停事件上，
+        不会继续下载新数据。该方法立即返回，不会等待任务实际暂停。
+        """
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+
+    def resume(self):
+        """
+        恢复暂停的下载任务。
+
+        调用后，所有被阻塞的任务将继续执行。
+        注意：该操作不会重新调度已被取消的任务（本下载器采用事件阻塞，不取消任务）。
+        """
+        if not self.pause_event.is_set():
+            self.pause_event.set()
+
+    def stop(self):
+        """
+        完全停止下载器并关闭所有资源。
+
+        调用后会先暂停下载，然后关闭 HTTP 客户端和辅助线程。
+        该方法立即返回，但清理工作在后台完成。
+        """
+        # 先暂停，然后设置暂停事件以唤醒可能阻塞的任务
+        self.pause()
+        # 主动设置事件，让任务能退出阻塞状态
+        if self.loop and not self.loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self._safe_stop(), self.loop)
+
+    async def _safe_stop(self):
+        """实际执行停止清理"""
+        self.pause_event.set()  # 唤醒所有阻塞的任务
+        # 取消所有正在运行的任务（除了辅助协程）
+        # 这里我们只关闭客户端，任务会因异常退出
+        if self.client:
+            await self.client.aclose()
+        # 停止调度线程
+        self._stop_dispatcher.set()
+        if self._dispatcher_thread:
+            self._dispatcher_thread.join(timeout=1)
