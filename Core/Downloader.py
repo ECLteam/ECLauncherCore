@@ -124,11 +124,15 @@ class Downloader:
         :param skip_preflight: 是否跳过总文件大小预检查，若跳过则直接使用文件计数模式。
         """
         # 统一路径类型
+        seen_paths = set()
         self.original_downloads: list[tuple[str, Path]] = []
         for url, path in download_list:
             if not isinstance(path, Path):
                 path = Path(path)
-            self.original_downloads.append((url, path))
+            path_str = str(path)
+            if path_str not in seen_paths:
+                seen_paths.add(path_str)
+                self.original_downloads.append((url, path))
 
         self.speed_limit_mb = speed_limit_mb
         self.progress_callback = progress_callback or (lambda *args: None)
