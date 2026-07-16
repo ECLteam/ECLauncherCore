@@ -67,9 +67,10 @@ class BaseApiClient:
         self.config = config
         self.max_retries = max_retries
         self._client = httpx.Client(
-            timeout=httpx.Timeout(30.0, connect=10.0),
+            http2=True,
+            timeout=httpx.Timeout(15, connect=10),
             follow_redirects=True,
-            headers={"User-Agent": "EuoraCraft-Launcher"},
+            headers={"Content-Type": "application/json", "User-Agent": "EuoraCraft-Launcher"},
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=40)
         )
 

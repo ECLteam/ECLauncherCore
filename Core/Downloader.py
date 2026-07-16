@@ -388,7 +388,7 @@ class Downloader:
         if self.loop is None:
             self.loop = asyncio.get_running_loop()
 
-        self.client = httpx.AsyncClient(http2=True, timeout=httpx.Timeout(30.0, connect=5.0))
+        self.client = httpx.AsyncClient(http2=True, timeout=httpx.Timeout(15, connect=5))
 
         # 预检或跳过预检
         if self.skip_preflight:
@@ -546,3 +546,9 @@ class Downloader:
         self._stop_dispatcher.set()
         if self._dispatcher_thread:
             self._dispatcher_thread.join(timeout=1)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self):
+        self.stop()
