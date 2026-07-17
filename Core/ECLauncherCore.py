@@ -388,7 +388,7 @@ def build_minecraft_cmd(config: LaunchConfig) -> str:
     if "id" in version_json.get("assetIndex", {}):
         index_id = version_json["assetIndex"]["id"]
 
-    game_json = Libs.find_version(version_json, config.game_path)
+    game_json = Libs.find_version(version_json, config.game_path, config.version_name)
     if game_json:
         jvm_builder.add_from_version_json(game_json[0])
         cp_builder.add_libraries(game_json[0])
