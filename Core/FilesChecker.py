@@ -1,7 +1,7 @@
-from Net.NetLibs import RepositoryResolver
-from Net.MetaClient import MojangClient
+from .Net.NetLibs import RepositoryResolver
+from .Net.MetaClient import MojangClient
 from pathlib import Path
-import Libs
+from . import Libs
 import json
 
 
@@ -19,14 +19,15 @@ class FilesChecker:
         self.mojang = mojang_client
         self.resolver = resolver
 
-    def _check_game_jar(self, game_path: Path, version_name: str, version_json: dict) -> list[tuple[str, str]]:  # 检查游戏本体
+    def _check_game_jar(self, game_path: Path, version_name: str, version_json: dict, jar_name: str | None = None) -> list[tuple[str, str]]:  # 检查游戏本体
         download_list = []
         if "client" in version_json.get("downloads", {}):
-            game_jar_path = game_path / "versions" / version_name / f"{version_name}.jar"
+            jar_name = jar_name or version_name
+            game_jar_path = game_path / "versions" / version_name / f"{jar_name}.jar"
             jar_sha1 = version_json["downloads"]["client"]["sha1"]
 
             if Libs.get_file_sha1(game_jar_path) != jar_sha1:
-                download_list.append(self.mojang.get_client_jar_url(jar_sha1))
+                download_list.append((self.mojang.get_client_jar_url(jar_sha1), game_jar_path))
 
         return download_list
 
@@ -129,10 +130,15 @@ class FilesChecker:
         download_list.extend(self._check_game_jar(game_path, version_name, version_json))
         download_list.extend(self._check_libraries(game_path, version_json))
         download_list.extend(self._check_assets(game_path, version_json))
-        game_json = Libs.find_version(version_json, game_path)
+        game_json = Libs.find_version(version_json, game_path, version_name)
 
         if game_json:
-            download_list.extend(self._check_game_jar(game_path, game_json[1].name, game_json[0]))
+            jar_name = game_json[1].name
+            if "inheritsFrom" in version_json:
+                json_path = game_path / "versions" / version_name / f"{version_json['inheritsFrom']}.json"
+                if json_path.is_file():
+                    jar_name = json_path.stem
+            download_list.extend(self._check_game_jar(game_path, game_json[1].name, game_json[0], jar_name=jar_name))
             download_list.extend(self._check_libraries(game_path, game_json[0]))
             download_list.extend(self._check_assets(game_path, game_json[0]))
 

@@ -1,8 +1,8 @@
-from Net.MetaClient import (
+from .Net.MetaClient import (
     MojangClient,
     FabricClient
 )
-from FilesChecker import FilesChecker
+from .FilesChecker import FilesChecker
 from pathlib import Path
 import json
 
@@ -17,24 +17,30 @@ class VersionClassifier:
         :return: {"分类": [版本列表], "映射": {...}}
         """
         special_fool_days = ["1.RV-Pre1"]
-        release, snapshot, fool_days, beta, alpha = [], [], [], [], []
+        all_ver, release, snapshot, fool_days, beta, alpha = [], [], [], [], [], []
         mapping = {}
         for v in versions:
-            if v["type"] == "release":
+            if "release" in v["type"]:
+                v["type"] = "Release"
                 release.append(v)
-            elif v["type"] == "snapshot":
+            elif "snapshot" in v["type"]:
                 if "-04-01" in v["releaseTime"] or v["id"] in special_fool_days:
+                    v["type"] = "FoolDay"
                     fool_days.append(v)
                 else:
+                    v["type"] = "Snapshot"
                     snapshot.append(v)
             elif "beta" in v["type"]:
+                v["type"] = "Beta"
                 beta.append(v)
             elif "alpha" in v["type"]:
+                v["type"] = "Alpha"
                 alpha.append(v)
+            all_ver.append(v)
             mapping.update({v["id"]: v})
 
         return {
-            "All": versions,  # 所有版本 [{"...": "..."}]
+            "All": all_ver,  # 所有版本 [{"...": "..."}]
             "Release": release,    # 正式版 [{"...": "..."}]
             "Snapshot": snapshot,  # 快照版 [{"...": "..."}]
             "FoolDays": fool_days,  # 愚人节版 [{"...": "..."}]
@@ -42,29 +48,6 @@ class VersionClassifier:
             "Alpha": alpha,  # Alpha版 [{"...": "..."}]
             "Mapping": mapping  # 映射表 {"<版本ID>": {...}}
         }
-
-
-class VersionMetadataManager:
-    """负责 VersionsInfo.json 的读写和更新"""
-    def __init__(self, game_path: Path):
-        """
-        初始化
-        :param game_path: .minecraft 路径
-        """
-        self.info_path = game_path / "versions" / "VersionsInfo.json"
-
-    def add_entry(self, version_id: str, metadata: dict) -> None:
-        """
-        写入缓存文件
-        :param version_id: 版本 ID
-        :param metadata: 版本信息
-        :return: None
-        """
-        data = {}
-        if self.info_path.is_file():
-            data = json.loads(self.info_path.read_text("utf-8"))
-        data.update({version_id: metadata})
-        self.info_path.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
 
 
 class GetGames:
@@ -86,8 +69,11 @@ class GetGames:
         self.fabric = fabric_client
         self.files_checker = files_checker
         self.game_path = Path(game_path)
-        self.metadata_mgr = VersionMetadataManager(self.game_path)
-        self.output_log = print
+
+    def _save_version_info(self, version_name: str, version_info: dict) -> None:
+        json_path = self.game_path / "versions" / version_name / "VersionInfo.json"
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(version_info, ensure_ascii=False, indent=4), encoding="utf-8")
 
     def get_minecraft_versions(self) -> dict:
         """
@@ -100,34 +86,102 @@ class GetGames:
             **VersionClassifier.classify(manifest["versions"])
         }
 
-    def download_minecraft(self, version_id: str, save_name: str | None = None) -> bool:
+    def build_minecraft_download_list(
+        self,
+        version_id: str,
+        save_name: str | None = None,
+        save_version_info: bool = True
+    ) -> list[tuple[str, str]] | str:
         """
         下载指定版本的 Minecraft
         :param version_id: 版本 ID
         :param save_name: 保存名称
-        :return: bool 值, 是否成功下载
+        :param save_version_info: 是否保存版本信息缓存
+        :return: 若 save_version_info 为 True 则返回下载列表, False 则只返回版本类型
         """
         save_name = save_name or version_id
         # 1. 获取版本 JSON（客户端封装了重试）
-        manifest = self.get_minecraft_versions()
-        target = next((v for v in manifest["versions"] if v["id"] == version_id), None)
-        if not target:
-            return False
-        version_data = self.mojang.get_version_json(version_id, target["sha1"])
+        manifest = self.get_minecraft_versions()["Mapping"]
+        if version_id not in manifest:
+            raise KeyError(f"未找到 Minecraft 版本 '{version_id}'")
+        manifest = manifest[version_id]
+        version_data = self.mojang.get_version_json(version_id, manifest["sha1"])
 
         # 2. 保存 JSON
-        json_path = self.game_path / "versions" / save_name / f"{save_name}.json"
+        json_path = self.game_path / "versions" / save_name / (f"{save_name}.json" if save_version_info else f"{version_id}.json")
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(json.dumps(version_data, indent=4), encoding="utf-8")
+        json_path.write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
 
         # 3. 更新元数据
-        self.metadata_mgr.add_entry(version_id, {
+        if save_version_info:
+            self._save_version_info(save_name, {
+                "Type": "Vanilla",
+                "VanillaVersion": version_id,
+                "VanillaType": manifest["type"]
+            })
+            return self.files_checker.check_files(self.game_path, save_name)
+        return manifest["type"]
+
+    def get_fabric_versions(self, game_version_id: str) -> dict[str, list[dict]] | None:
+        """
+        获取指定某个 Minecraft 版本可用的 Fabric 版本列表
+        :param game_version_id: 版本 ID
+        :return: Fabric 版本列表
+        """
+        fabric_versions = self.fabric.get_loaders(game_version_id)
+        if not fabric_versions:
+            return None
+        all_versions = []
+        stable_versions = []
+        not_stable_versions = []
+        for fabric_version in fabric_versions:
+            is_stable = fabric_version["loader"]["stable"]
+            version_info = {
+                "LoaderVersion": fabric_version["loader"]["version"],
+                "GameVersion": game_version_id,
+                "Stable": is_stable,
+            }
+            all_versions.append(version_info)
+            if is_stable:
+                stable_versions.append(version_info)
+            else:
+                not_stable_versions.append(version_info)
+        return {
+            "All": all_versions,
+            "Stable": stable_versions,
+            "NotStable": not_stable_versions
+        }
+
+
+    def build_fabric_download_list(
+            self,
+            game_version_id: str,
+            loader_version: str,
+            save_name: str | None = None
+    ) -> list[tuple[str, str]]:
+        save_name = save_name or f"{game_version_id}-Fabric"
+
+        mc_type = self.build_minecraft_download_list(
+            version_id=game_version_id,
+            save_name=save_name,
+            save_version_info=False
+        )
+        version_data = self.fabric.get_loader_profile(
+            game_version_id=game_version_id,
+            loader_version=loader_version
+        )
+
+        json_path = self.game_path / "versions" / save_name / f"{save_name}.json"
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
+
+        self._save_version_info(save_name, {
             "Type": "Vanilla",
-            "Version": version_id,
-            "VanillaType": target["type"]
+            "VanillaVersion": game_version_id,
+            "VanillaType": mc_type,
+            "LoaderType": "Fabric",
+            "LoaderVersion": loader_version
         })
 
-        # 4. 下载文件（调用统一检查器）
-        self.files_checker.check_files(self.game_path, save_name)
-        return True
+        return self.files_checker.check_files(self.game_path, save_name)
 

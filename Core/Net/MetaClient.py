@@ -53,7 +53,7 @@ class FabricClient(BaseApiClient):
         :return: Fabric 版本列表
         """
         return self._get_json_with_retry(
-            f"{self.config.FabricMeta}/v1/versions/loader/{version_id}"
+            f"{self.config.FabricMeta}/v2/versions/loader/{version_id}"
         )
 
     def get_loader_profile(self, game_version_id: str, loader_version: str) -> dict:

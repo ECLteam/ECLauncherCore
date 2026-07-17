@@ -1,9 +1,9 @@
 from dataclasses import dataclass, asdict, fields
 from shutil import rmtree
 from pathlib import Path
+from . import Libs
 import platform
 import json
-import Libs
 import re
 
 class JvmArgumentBuilder:
@@ -65,14 +65,14 @@ class JvmArgumentBuilder:
                         continue
                     if arguments_jvm in self.args:
                         continue
-                    self.args.append(arguments_jvm)
+                    self.args.append(arguments_jvm.replace(" ", ""))
             if "game" in version_json["arguments"]:
                 for arguments_game in version_json["arguments"]["game"]:
                     if type(arguments_game) is not str:
                         continue
                     if arguments_game in self.args:
                         continue
-                    self.args.append(arguments_game)
+                    self.args.append(arguments_game.replace(" ", ""))
         elif "minecraftArguments" in version_json:
             ex_args = [
                 "-Djava.library.path=${natives_directory}",
@@ -395,7 +395,11 @@ def build_minecraft_cmd(config: LaunchConfig) -> str:
         index_id = game_json[0].get("assetIndex", {}).get("id", index_id)
 
         if not version_jar.is_file():
-            version_jar = game_json[1] / f"{game_json[1].name}.jar"
+            jar_path = Path(config.game_path) / "versions" / config.version_name / f"{version_json['inheritsFrom']}.jar"
+            if jar_path.is_file():
+                version_jar = jar_path
+            else:
+                version_jar = game_json[1] / f"{game_json[1].name}.jar"
 
     if config.custom_jvm_params:
         jvm_builder.add_custom(config.custom_jvm_params)

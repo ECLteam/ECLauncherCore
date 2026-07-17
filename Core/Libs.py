@@ -91,16 +91,21 @@ def get_file_sha1(file_path: str | Path) -> str:
     return sha1.hexdigest()
 
 
-def find_version(version_json: dict, game_path: Path | str) -> tuple[dict, Path] | None:
+def find_version(version_json: dict, game_path: Path | str, version_name: str | None = None) -> tuple[dict, Path] | None:
     """
     查找 Meta Json 的 inheritsFrom 键值对应游戏版本
     :param version_json: Meta Json 内容
     :param game_path: .minecraft 路径
+    :param version_name: 可选, 这是为了适配版本合并
     :return: None 为没找到, 或对应版本 (MetaJson内容, 路径)
     """
     game_path = Path(game_path)
     if "inheritsFrom" in version_json:  # 若有Mod加载器则寻找原版游戏
         inherits_from = version_json["inheritsFrom"]
+        if version_name:
+            json_path = game_path / "versions" / version_name / f"{inherits_from}.json"
+            if json_path.is_file():
+                return json.loads(json_path.read_text("utf-8")), json_path.parent
         for version_path in (game_path / "versions").iterdir():  # 通过版本Json内的id键查找是否为对应的游戏版本, 而不是根据Json的名字判断
             if not version_path.is_dir(): continue
             game_json_path = version_path / f"{version_path.name}.json"
