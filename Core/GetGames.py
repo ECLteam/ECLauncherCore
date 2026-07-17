@@ -115,9 +115,8 @@ class GetGames:
         # 3. 更新元数据
         if save_version_info:
             self._save_version_info(save_name, {
-                "Type": "Vanilla",
+                "VanillaType": manifest["type"],
                 "VanillaVersion": version_id,
-                "VanillaType": manifest["type"]
             })
             return self.files_checker.check_files(self.game_path, save_name)
         return manifest["type"]
@@ -176,9 +175,8 @@ class GetGames:
         json_path.write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
 
         self._save_version_info(save_name, {
-            "Type": "Vanilla",
-            "VanillaVersion": game_version_id,
             "VanillaType": mc_type,
+            "VanillaVersion": game_version_id,
             "LoaderType": "Fabric",
             "LoaderVersion": loader_version
         })
