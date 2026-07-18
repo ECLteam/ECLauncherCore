@@ -275,6 +275,7 @@ class MinecraftClient:
 
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
             "Content-Length": str(len(request_body)),
             "Authorization": f"Bearer {minecraft_token}"
         }

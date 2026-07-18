@@ -1,5 +1,4 @@
-from .Net.NetLibs import RepositoryResolver
-from .Net.MetaClient import MojangClient
+from .NetLibs import BaseApiClient
 from pathlib import Path
 from . import Libs
 import json
@@ -8,16 +7,34 @@ import json
 class FilesChecker:
     def __init__(
         self,
-        mojang_client: MojangClient,
-        resolver: RepositoryResolver
+        api_client: BaseApiClient
     ):
         """
         实例化一个文件检查器, 用于检查 Minecraft 文件的完整型
-        :param mojang_client: MojangClient 实例
-        :param resolver: RepositoryResolver 实例 null
+        :param api_client: BaseApiClient 实例
         """
-        self.mojang = mojang_client
-        self.resolver = resolver
+        self.api_client = api_client
+        self.config = self.api_client.config
+
+    def _resolve(self, url: str, path: str) -> str:
+        """
+        返回最匹配的仓库基础 URL
+        :param url: URL
+        :param path: Path
+        :return: API URL
+        """
+        combined = (url + path).lower()
+
+        if "fabric" in combined:
+            return self.config.Fabric
+        if "neoforged" in combined or "neoforge" in combined:
+            return self.config.NeoForged
+        if "forge" in combined:
+            return self.config.Forge
+        if "quilt" in combined:
+            return self.config.Quilt
+        # 默认回退到官方 libraries 仓库
+        return self.config.Libraries
 
     def _check_game_jar(self, game_path: Path, version_name: str, version_json: dict, jar_name: str | None = None) -> list[tuple[str, str]]:  # 检查游戏本体
         download_list = []
@@ -27,7 +44,7 @@ class FilesChecker:
             jar_sha1 = version_json["downloads"]["client"]["sha1"]
 
             if Libs.get_file_sha1(game_jar_path) != jar_sha1:
-                download_list.append((self.mojang.get_client_jar_url(jar_sha1), game_jar_path))
+                download_list.append((self.api_client.get_client_jar_url(jar_sha1), game_jar_path))
 
         return download_list
 
@@ -43,7 +60,7 @@ class FilesChecker:
 
                     download_list.append(
                         (
-                            f"{self.resolver.resolve(classifiers['url'], classifiers['path'])}/{classifiers['path']}",
+                            f"{self._resolve(classifiers['url'], classifiers['path'])}/{classifiers['path']}",
                             str(natives_path)
                         )
                     )
@@ -71,7 +88,7 @@ class FilesChecker:
 
             download_list.append(
                 (
-                    f"{self.resolver.resolve(raw_url, lib_path)}/{lib_path}",
+                    f"{self._resolve(raw_url, lib_path)}/{lib_path}",
                     str(libraries_path)
                 )
             )
@@ -94,7 +111,7 @@ class FilesChecker:
         if Libs.get_file_sha1(local_index_path) != file_sha1:
             try:
                 # 直接使用 Mojang 客户端获取索引数据
-                index_data = self.mojang.get_asset_index(asset_id, file_sha1)
+                index_data = self.api_client.get_asset_index(asset_id, file_sha1)
                 local_index_path.parent.mkdir(parents=True, exist_ok=True)
                 local_index_path.write_text(json.dumps(index_data), encoding="utf-8")
             except Exception:
@@ -102,7 +119,7 @@ class FilesChecker:
         else:
             index_data = json.loads(local_index_path.read_text("utf-8"))
 
-        base_assets = self.mojang.config.Assets
+        base_assets = self.config.Assets
 
         for assets in index_data["objects"].values():
             asset_file_sha1 = assets["hash"]

@@ -1,7 +1,3 @@
-from .Net.MetaClient import (
-    MojangClient,
-    FabricClient
-)
 from .FilesChecker import FilesChecker
 from pathlib import Path
 import json
@@ -53,21 +49,16 @@ class VersionClassifier:
 class GetGames:
     def __init__(
         self,
-        mojang_client: MojangClient,
-        fabric_client: FabricClient,
         files_checker: FilesChecker,
         game_path: Path | str,
     ):
         """
         获取游戏基类
-        :param mojang_client: MojangClient 实例
-        :param fabric_client: FabricClient 实例
         :param files_checker: FilesChecker 实例
         :param game_path: .minecraft 路径
         """
-        self.mojang = mojang_client
-        self.fabric = fabric_client
         self.files_checker = files_checker
+        self.api_client = files_checker.api_client
         self.game_path = Path(game_path)
 
     def _save_version_info(self, version_name: str, version_info: dict) -> None:
@@ -80,7 +71,7 @@ class GetGames:
         获取版本清单列表并分类和映射
         :return: {"Latest": {上一个版本},"分类": [版本列表], "映射": {...}}
         """
-        manifest = self.mojang.get_version_manifest()
+        manifest = self.api_client.get_minecraft_manifest()
         return {
             "Latest": manifest["latest"],  # 上一个版本 {"release": "...", "snapshot": "..."}
             **VersionClassifier.classify(manifest["versions"])
@@ -105,7 +96,7 @@ class GetGames:
         if version_id not in manifest:
             raise KeyError(f"未找到 Minecraft 版本 '{version_id}'")
         manifest = manifest[version_id]
-        version_data = self.mojang.get_version_json(version_id, manifest["sha1"])
+        version_data = self.api_client.get_minecraft_json(version_id, manifest["sha1"])
 
         # 2. 保存 JSON
         json_path = self.game_path / "versions" / save_name / (f"{save_name}.json" if save_version_info else f"{version_id}.json")
@@ -127,7 +118,7 @@ class GetGames:
         :param game_version_id: 版本 ID
         :return: Fabric 版本列表
         """
-        fabric_versions = self.fabric.get_loaders(game_version_id)
+        fabric_versions = self.api_client.get_fabric_versions(game_version_id)
         if not fabric_versions:
             return None
         all_versions = []
@@ -165,7 +156,7 @@ class GetGames:
             save_name=save_name,
             save_version_info=False
         )
-        version_data = self.fabric.get_loader_profile(
+        version_data = self.api_client.get_fabric_profile(
             game_version_id=game_version_id,
             loader_version=loader_version
         )
