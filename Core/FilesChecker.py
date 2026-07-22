@@ -36,7 +36,7 @@ class FilesChecker:
         # 默认回退到官方 libraries 仓库
         return self.config.Libraries
 
-    def _check_game_jar(self, game_path: Path, version_name: str, version_json: dict, jar_name: str | None = None) -> list[tuple[str, str]]:  # 检查游戏本体
+    def check_game_jar(self, game_path: Path, version_name: str, version_json: dict, jar_name: str | None = None) -> list[tuple[str, str]]:  # 检查游戏本体
         download_list = []
         if "client" in version_json.get("downloads", {}):
             jar_name = jar_name or version_name
@@ -48,7 +48,7 @@ class FilesChecker:
 
         return download_list
 
-    def _check_libraries(self, game_path: Path, version_json: dict) -> list[tuple[str, str]]:
+    def check_libraries(self, game_path: Path, version_json: dict) -> list[tuple[str, str]]:
         download_list = []
         for libraries in version_json.get("libraries", []):
             if "classifiers" in libraries.get("downloads", {}):  # 补全natives
@@ -96,7 +96,7 @@ class FilesChecker:
         return download_list
 
 
-    def _check_assets(self, game_path: Path, version_json: dict) -> list[tuple[str, str]]:
+    def check_assets(self, game_path: Path, version_json: dict) -> list[tuple[str, str]]:
         download_list = []
         asset_index = version_json.get("assetIndex", {})
 
@@ -144,9 +144,9 @@ class FilesChecker:
             return download_list
 
         version_json = json.loads((game_path / "versions" / version_name / f"{version_name}.json").read_text("utf-8"))
-        download_list.extend(self._check_game_jar(game_path, version_name, version_json))
-        download_list.extend(self._check_libraries(game_path, version_json))
-        download_list.extend(self._check_assets(game_path, version_json))
+        download_list.extend(self.check_game_jar(game_path, version_name, version_json))
+        download_list.extend(self.check_libraries(game_path, version_json))
+        download_list.extend(self.check_assets(game_path, version_json))
         game_json = Libs.find_version(version_json, game_path, version_name)
 
         if game_json:
@@ -155,9 +155,9 @@ class FilesChecker:
                 json_path = game_path / "versions" / version_name / f"{version_json['inheritsFrom']}.json"
                 if json_path.is_file():
                     jar_name = json_path.stem
-            download_list.extend(self._check_game_jar(game_path, game_json[1].name, game_json[0], jar_name=jar_name))
-            download_list.extend(self._check_libraries(game_path, game_json[0]))
-            download_list.extend(self._check_assets(game_path, game_json[0]))
+            download_list.extend(self.check_game_jar(game_path, game_json[1].name, game_json[0], jar_name=jar_name))
+            download_list.extend(self.check_libraries(game_path, game_json[0]))
+            download_list.extend(self.check_assets(game_path, game_json[0]))
 
         return download_list
 

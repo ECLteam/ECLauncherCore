@@ -1,4 +1,6 @@
+from .LoaderInstaller import LoaderInstaller
 from .FilesChecker import FilesChecker
+from shutil import rmtree
 from pathlib import Path
 import json
 
@@ -50,7 +52,8 @@ class GetGames:
     def __init__(
         self,
         files_checker: FilesChecker,
-        game_path: Path | str,
+        loader_installer: LoaderInstaller,
+        game_path: Path | str
     ):
         """
         获取游戏基类
@@ -58,7 +61,9 @@ class GetGames:
         :param game_path: .minecraft 路径
         """
         self.files_checker = files_checker
+        self.config = files_checker.config
         self.api_client = files_checker.api_client
+        self.loader_installer = loader_installer
         self.game_path = Path(game_path)
 
     def _save_version_info(self, version_name: str, version_info: dict) -> None:
@@ -82,7 +87,7 @@ class GetGames:
         version_id: str,
         save_name: str | None = None,
         save_version_info: bool = True
-    ) -> list[tuple[str, str]] | str:
+    ) -> list[tuple[str, str]] | tuple[str, dict]:
         """
         下载指定版本的 Minecraft
         :param version_id: 版本 ID
@@ -110,7 +115,7 @@ class GetGames:
                 "VanillaVersion": version_id,
             })
             return self.files_checker.check_files(self.game_path, save_name)
-        return manifest["type"]
+        return manifest["type"], version_data
 
     def get_fabric_versions(self, game_version_id: str) -> dict[str, list[dict]] | None:
         """
@@ -144,18 +149,25 @@ class GetGames:
 
 
     def build_fabric_download_list(
-            self,
-            game_version_id: str,
-            loader_version: str,
-            save_name: str | None = None
+        self,
+        game_version_id: str,
+        loader_version: str,
+        save_name: str | None = None
     ) -> list[tuple[str, str]]:
+        """
+        下载指定 Minecraft 版本的指定 Fabric
+        :param game_version_id: 版本 ID
+        :param loader_version: Loader 版本
+        :param save_name: 保存名称
+        :return: 下载列表 [("URL", "PATH")]
+        """
         save_name = save_name or f"{game_version_id}-Fabric"
 
         mc_type = self.build_minecraft_download_list(
             version_id=game_version_id,
             save_name=save_name,
             save_version_info=False
-        )
+        )[0]
         version_data = self.api_client.get_fabric_profile(
             game_version_id=game_version_id,
             loader_version=loader_version
@@ -169,6 +181,42 @@ class GetGames:
             "VanillaType": mc_type,
             "VanillaVersion": game_version_id,
             "LoaderType": "Fabric",
+            "LoaderVersion": loader_version
+        })
+
+        return self.files_checker.check_files(self.game_path, save_name)
+
+    def get_neoforged_versions(self, game_version_id: str) -> dict[str, list] | None:
+        return self.api_client.get_neoforged_versions(game_version_id)
+
+
+    def build_neoforged_download_list(
+        self,
+        game_version_id: str,
+        loader_version: str,
+        java_path: Path | str,
+        save_name: str | None = None
+    ) -> list[tuple[str, str]]:
+        save_name = save_name or f"{game_version_id}-NeoForged"
+
+        mc_type, game_version_data = self.build_minecraft_download_list(
+            version_id=game_version_id,
+            save_name=save_name,
+            save_version_info=False
+        )
+        jar_path = self.game_path / "versions" / save_name / f"{game_version_id}.jar"
+        self.api_client.download_client_jar(game_version_data["downloads"]["client"]["sha1"], jar_path)
+
+        save_path = self.game_path / "versions" / save_name / "InstallCache"
+        save_path.mkdir(parents=True, exist_ok=True)
+        installer_path = self.api_client.download_neoforged_installer(game_version_id, loader_version, save_path)
+        self.loader_installer.install_neoforged(installer_path, java_path, save_name)
+        rmtree(save_path)
+
+        self._save_version_info(save_name, {
+            "VanillaType": mc_type,
+            "VanillaVersion": game_version_id,
+            "LoaderType": "NeoForged",
             "LoaderVersion": loader_version
         })
 

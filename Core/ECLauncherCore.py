@@ -52,7 +52,7 @@ class JvmArgumentBuilder:
         elif self.system == "Darwin":
             self.args.append("-XstartOnFirstThread")
 
-    def add_from_version_json(self, version_json: dict) -> "JvmArgumentBuilder":
+    def add_jvm_args(self, version_json: dict) -> "JvmArgumentBuilder":
         """
         读取 Meta Json 内容添加相应 Jvm 参数
         :param version_json: Meta Json
@@ -66,13 +66,6 @@ class JvmArgumentBuilder:
                     if arguments_jvm in self.args:
                         continue
                     self.args.append(arguments_jvm.replace(" ", ""))
-            if "game" in version_json["arguments"]:
-                for arguments_game in version_json["arguments"]["game"]:
-                    if type(arguments_game) is not str:
-                        continue
-                    if arguments_game in self.args:
-                        continue
-                    self.args.append(arguments_game.replace(" ", ""))
         elif "minecraftArguments" in version_json:
             ex_args = [
                 "-Djava.library.path=${natives_directory}",
@@ -83,6 +76,22 @@ class JvmArgumentBuilder:
                 if arg in self.args:
                     continue
                 self.args.append(arg)
+        return self
+
+    def add_game_args(self, version_json: dict) -> "JvmArgumentBuilder":
+        """
+        读取 Meta Json 内容添加相应 Jvm 参数
+        :param version_json: Meta Json
+        :return: 返回实例自身
+        """
+        if "arguments" in version_json:
+            if "game" in version_json["arguments"]:
+                for arguments_game in version_json["arguments"]["game"]:
+                    if type(arguments_game) is not str:
+                        continue
+                    if arguments_game in self.args:
+                        continue
+                    self.args.append(arguments_game.replace(" ", ""))
         return self
 
     def add_custom(self, custom_args: list[str]) -> "JvmArgumentBuilder":
@@ -378,10 +387,8 @@ def build_minecraft_cmd(config: LaunchConfig) -> str:
         ).read_text("utf-8")
     )
 
-    jvm_builder.add_from_version_json(version_json)
-
+    jvm_builder.add_jvm_args(version_json)
     cp_builder = ClasspathBuilder(config.game_path)
-    cp_builder.add_libraries(version_json)
 
     version_jar = Path(config.game_path) / "versions" / config.version_name / f"{config.version_name}.jar"
     index_id = ""
@@ -390,7 +397,8 @@ def build_minecraft_cmd(config: LaunchConfig) -> str:
 
     game_json = Libs.find_version(version_json, config.game_path, config.version_name)
     if game_json:
-        jvm_builder.add_from_version_json(game_json[0])
+        jvm_builder.add_jvm_args(game_json[0])
+        jvm_builder.add_game_args(game_json[0])
         cp_builder.add_libraries(game_json[0])
         index_id = game_json[0].get("assetIndex", {}).get("id", index_id)
 
@@ -400,6 +408,9 @@ def build_minecraft_cmd(config: LaunchConfig) -> str:
                 version_jar = jar_path
             else:
                 version_jar = game_json[1] / f"{game_json[1].name}.jar"
+
+    jvm_builder.add_game_args(version_json)
+    cp_builder.add_libraries(version_json)
 
     if config.custom_jvm_params:
         jvm_builder.add_custom(config.custom_jvm_params)
