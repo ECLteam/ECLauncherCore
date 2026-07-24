@@ -186,7 +186,12 @@ class GetGames:
 
         return self.files_checker.check_files(self.game_path, save_name)
 
-    def get_neoforged_versions(self, game_version_id: str) -> dict[str, list] | None:
+    def get_neoforged_versions(self, game_version_id: str) -> dict[str, list]:
+        """
+        获取指定某个 Minecraft 版本可用的 NeoForged 版本列表
+        :param game_version_id: 版本 ID
+        :return: NeoForged 版本列表
+        """
         return self.api_client.get_neoforged_versions(game_version_id)
 
 
@@ -197,6 +202,14 @@ class GetGames:
         java_path: Path | str,
         save_name: str | None = None
     ) -> list[tuple[str, str]]:
+        """
+        下载指定 Minecraft 版本的指定 NeoForged
+        :param game_version_id: 版本 ID
+        :param loader_version: Loader 版本
+        :param java_path: Java Path
+        :param save_name: 保存名称
+        :return: 下载列表 [("URL", "PATH")]
+        """
         save_name = save_name or f"{game_version_id}-NeoForged"
 
         mc_type, game_version_data = self.build_minecraft_download_list(
@@ -217,6 +230,58 @@ class GetGames:
             "VanillaType": mc_type,
             "VanillaVersion": game_version_id,
             "LoaderType": "NeoForged",
+            "LoaderVersion": loader_version
+        })
+
+        return self.files_checker.check_files(self.game_path, save_name)
+
+    def get_forge_versions(self, game_version_id: str) -> list[dict[str, str]]:
+        """
+        获取指定某个 Minecraft 版本可用的 Forge 版本列表
+        :param game_version_id: 版本 ID
+        :return: Forge 版本列表
+        """
+        return self.api_client.get_forge_versions(game_version_id)
+
+    def build_forge_download_list(
+        self,
+        game_version_id: str,
+        loader_version: str,
+        java_path: Path | str,
+        save_name: str | None = None
+    ) -> list[tuple[str, str]]:
+        """
+        下载指定 Minecraft 版本的指定 Forge
+        :param game_version_id: 版本 ID
+        :param loader_version: Loader 版本
+        :param java_path: Java Path
+        :param save_name: 保存名称
+        :return: 下载列表 [("URL", "PATH")]
+        """
+        save_name = save_name or f"{game_version_id}-Forge"
+
+        #"""
+        mc_type, game_version_data = self.build_minecraft_download_list(
+            version_id=game_version_id,
+            save_name=save_name,
+            save_version_info=False
+        )
+        jar_path = self.game_path / "versions" / save_name / f"{game_version_id}.jar"
+        self.api_client.download_client_jar(game_version_data["downloads"]["client"]["sha1"], jar_path)
+        #"""
+        #mc_type = "Release"
+
+        save_path = self.game_path / "versions" / save_name / "InstallCache"
+        save_path.mkdir(parents=True, exist_ok=True)
+        installer_path = self.api_client.download_forge_installer(game_version_id, loader_version, save_path)
+        #installer_path = r"F:\TestMC\2\versions\1.12.2-Forge\InstallCache\forge-1.12.2-14.23.5.2864-installer.jar"
+        self.loader_installer.install_neoforged(installer_path, java_path, save_name)
+        #rmtree(save_path)
+
+        self._save_version_info(save_name, {
+            "VanillaType": mc_type,
+            "VanillaVersion": game_version_id,
+            "LoaderType": "Forge",
             "LoaderVersion": loader_version
         })
 

@@ -19,6 +19,13 @@ class LoaderInstaller:
         game_path: Path | str,
         log_callback: Callable[[str], None] | None = None
      ):
+        """
+        初始化
+        :param files_checker: FilesChecker 实例
+        :param instances_mgr: InstancesManager 实例
+        :param game_path: .minecraft 路径
+        :param log_callback: Log 回调
+        """
         self.files_checker = files_checker
         self.config = files_checker.config
         self.instances_mgr = instances_mgr
@@ -33,14 +40,24 @@ class LoaderInstaller:
         java_path: Path | str,
         save_name: str
     ) -> bool:
+        """
+        安装 NeoForged 或高版本 Forge(会回退旧版安装)
+        :param installer_path: Installer.jar 路径
+        :param java_path: Java Path
+        :param save_name: 保存名称
+        :return: bool
+        """
         installer_path = Path(installer_path)
-        with zipfile.ZipFile(installer_path, "r") as zf:
-            install_profile = json.loads(zf.read("install_profile.json"))
-            version_data = json.loads(zf.read("version.json"))
-            bin_name = install_profile["data"]["BINPATCH"]["client"].replace("[", "").replace("]", "").replace("'", "").replace("/", "", 1)
-            patch_bin = zf.read(bin_name)
+        try:
+            with zipfile.ZipFile(installer_path, "r") as zf:
+                install_profile = json.loads(zf.read("install_profile.json"))
+                version_data = json.loads(zf.read("version.json"))
+                bin_name = install_profile["data"]["BINPATCH"]["client"].replace("[", "").replace("]", "").replace("'", "").replace("/", "", 1)
+                patch_bin = zf.read(bin_name)
+        except:
+            return self.install_forge(installer_path, save_name)
         if "processors" not in install_profile or not install_profile["processors"]:
-            return False
+            return self.install_forge(installer_path, save_name)
         java_path = Path(java_path)
         ver_path = self.game_path / "versions" / save_name
         (ver_path / f"{save_name}.json").write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
@@ -87,9 +104,346 @@ class LoaderInstaller:
             for cp_name in processor["classpath"]:
                 lib_path = self.game_path / "libraries" / f"{Libs.name_to_path(cp_name)}"
                 classpath.append(str(lib_path))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            if processor["jar"] not in processor["classpath"]:
+                lib_path = self.game_path / "libraries" / f"{Libs.name_to_path(processor["jar"])}"
+                classpath.append(str(lib_path))
             cp = self.cp_delimiter.join(classpath)
 
-            jar_path = self.game_path / "libraries" / f"{Libs.name_to_path(processor["jar"])}"
+            jar_path = self.game_path / "libraries" / f"{Libs.name_to_path(processor['jar'])}"
             with zipfile.ZipFile(jar_path, "r") as zf:
                 manifest_mf = zf.read("META-INF/MANIFEST.MF").decode("utf-8")
             match = re.search(r"^Main-Class:\s*(.+)$", manifest_mf, re.MULTILINE)
@@ -97,6 +451,7 @@ class LoaderInstaller:
                 main_class = match.group(1).strip()
                 processors.append(f'"{java_path}" -cp "{cp}" "{main_class}" {jvm_args}')
 
+        print(processors)
         for args in processors:
             self.instances_mgr.create_instance(
                 instance_name="NeoForged Installer",
@@ -104,5 +459,42 @@ class LoaderInstaller:
                 args=args,
                 cwd=installer_path.parent,
             )
+        return True
+
+    def install_forge(
+        self,
+        installer_path: Path | str,
+        save_name: str
+    ) -> bool:
+        """
+        安装旧版 Forge
+        :param installer_path: Installer.jar 路径
+        :param save_name: 保存名称
+        :return: bool
+        """
+        installer_path = Path(installer_path)
+        with zipfile.ZipFile(installer_path, "r") as zf:
+            install_profile = json.loads(zf.read("install_profile.json"))
+            try:
+                version_data = json.loads(zf.read("version.json"))
+            except KeyError:
+                version_data = install_profile["versionInfo"]
+                for libraries in version_data["libraries"]:
+                    if "clientreq" not in libraries and "serverreq" not in libraries:
+                        continue
+                    elif "clientreq" not in libraries or not libraries["clientreq"]:
+                        version_data["libraries"].remove(libraries)
+            jar_path = install_profile.get("install", {}).get("filePath")
+            if jar_path:
+                jar_path = jar_path.replace("/", "", 1)
+                lib_path = self.game_path / "libraries" / f"{Libs.name_to_path(install_profile['install']['path'])}"
+                lib_path.parent.mkdir(parents=True, exist_ok=True)
+                lib_path.write_bytes(zf.read(jar_path))
+            else:
+                jar_path = Libs.name_to_path(install_profile["path"])
+                lib_path = self.game_path / "libraries" / f"{jar_path}"
+                lib_path.parent.mkdir(parents=True, exist_ok=True)
+                lib_path.write_bytes(zf.read(f"maven/{jar_path}"))
+        (self.game_path / "versions" / save_name / f"{save_name}.json").write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
         return True
 

@@ -70,9 +70,12 @@ class JvmArgumentBuilder:
             ex_args = [
                 "-Djava.library.path=${natives_directory}",
                 "-cp ${classpath}",
-                version_json["minecraftArguments"]
             ]
             for arg in ex_args:
+                if arg in self.args:
+                    continue
+                self.args.append(arg)
+            for arg in version_json["minecraftArguments"].split():
                 if arg in self.args:
                     continue
                 self.args.append(arg)
@@ -237,9 +240,9 @@ class LaunchConfig:
     """添加额外的 Jvm 参数"""
     version_isolation: bool = False
     """是否隔离版本, 不推荐不隔离"""
-    window_width: int | str = "${resolution_width}"
+    window_width: int | str = 854
     """Minecraft 窗口宽度(px)"""
-    window_height: int | str = "${resolution_height}"
+    window_height: int | str = 480
     """Minecraft 窗口高度(px)"""
 
     def get(self, key_name: str) -> str | None:

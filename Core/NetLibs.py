@@ -1,7 +1,9 @@
 from dataclasses import dataclass, fields, asdict
 from time import sleep as t_sleep
 from pathlib import Path
+from lxml import html
 import httpx
+
 
 
 @dataclass
@@ -13,7 +15,7 @@ class ApiUrlConfig:
     Data: str = "https://launcher.mojang.com"
     Libraries: str = "https://libraries.minecraft.net"
     Assets: str = "https://resources.download.minecraft.net"
-    Forge: str = "https://files.minecraftforge.net/maven"
+    Forge: str = "https://maven.minecraftforge.net"
     Fabric: str = "https://maven.fabricmc.net"
     FabricMeta: str = "https://meta.fabricmc.net"
     NeoForged: str = "https://maven.neoforged.net/releases"
@@ -94,9 +96,9 @@ class BaseApiClient:
         )
 
     def _get_json_with_retry(self,
-             url: str,
-             data: dict | None = None,
-             headers: dict | None = None
+            url: str,
+            data: dict | None = None,
+            headers: dict | None = None
          ):
         """带重试的 GET JSON 方法，供子类复用"""
         headers = headers or self.headers
@@ -105,16 +107,16 @@ class BaseApiClient:
                 resp = self._client.get(url, params=data, headers=headers)
                 resp.raise_for_status()
                 return resp.json()
-            except (httpx.HTTPError, httpx.StreamError):
+            except (httpx.HTTPError, httpx.StreamError) as e:
                 if attempt == self.max_retries - 1:
-                    break
+                    raise e from e
                 t_sleep(2 ** attempt)
-        raise RuntimeError(f"请求失败: {url}")
+        raise RuntimeError(f"下载失败: {url}")
 
     def _download_with_retry(self,
-             url: str,
-             data: dict | None = None,
-             headers: dict | None = None
+            url: str,
+            data: dict | None = None,
+            headers: dict | None = None
          ) -> bytes:
         """带重试的单文件下载方法，供子类复用"""
         headers = headers or self.headers
@@ -123,9 +125,9 @@ class BaseApiClient:
                 resp = self._client.get(url, params=data, headers=headers)
                 resp.raise_for_status()
                 return resp.content
-            except (httpx.HTTPError, httpx.StreamError):
+            except (httpx.HTTPError, httpx.StreamError) as e:
                 if attempt == self.max_retries - 1:
-                    break
+                    raise e from e
                 t_sleep(2 ** attempt)
         raise RuntimeError(f"下载失败: {url}")
 
@@ -193,6 +195,11 @@ class BaseApiClient:
         )
 
     def get_neoforged_versions(self, game_version_id: str) -> dict[str, list]:
+        """
+        获取指定某个 Minecraft 版本可用的 NeoForged 版本列表
+        :param game_version_id: 游戏版本 ID
+        :return: NeoForged 版本列表
+        """
         all_ver = []
         beta_ver = []
         alpha_ver = []
@@ -265,16 +272,85 @@ class BaseApiClient:
             "Alpha": alpha_ver
         }
 
-    def download_neoforged_installer(self, game_version_id: str, loader_version: str, save_path: Path | str):
+    def download_neoforged_installer(self, game_version_id: str, loader_version: str, save_path: Path | str) -> Path:
+        """
+        下载一个 NeoForged 版本的 Installer.jar
+        :param game_version_id: 游戏版本 ID
+        :param loader_version: NeoForged 版本 ID
+        :param save_path: 保存文件夹路径
+        :return: 保存路径
+        """
         save_path = Path(save_path)
         if type(self.config) == BmclApiUrl:
             url = f"https://bmclapi2.bangbang93.com/neoforge/version/{loader_version}/download/installer.jar"
         elif game_version_id == "1.20.1":
-            url = f"https://maven.neoforged.net/releases/net/neoforged/forge/{loader_version}/forge-{loader_version}-installer.jar"
+            url = f"{self.config.NeoForged}/net/neoforged/forge/{loader_version}/forge-{loader_version}-installer.jar"
         else:
-            url = f"https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader_version}/neoforge-{loader_version}-installer.jar"
+            url = f"{self.config.NeoForged}/net/neoforged/neoforge/{loader_version}/neoforge-{loader_version}-installer.jar"
 
         save_path = save_path / f"neoforge-{loader_version}-installer.jar"
+        save_path.write_bytes(self._download_with_retry(url))
+
+        return save_path
+
+    def get_forge_versions(self, game_version_id: str) -> list[dict[str, str]]:
+        """
+        获取指定某个 Minecraft 版本可用的 Forge 版本列表
+        :param game_version_id: 游戏版本 ID
+        :return: Forge 版本列表
+        """
+        game_version = game_version_id.replace("-", "_")
+        if type(self.config) == BmclApiUrl:
+            ver_list = self._get_json_with_retry(
+                f"https://bmclapi2.bangbang93.com/forge/minecraft/{game_version}"
+            )
+            versions = []
+            for version in ver_list:
+                versions.append({
+                    "LoaderVersion": version["version"],
+                    "GameVersion": game_version_id
+                })
+            return versions
+        else:
+            versions = []
+            get_html = self._download_with_retry(
+                f"https://files.minecraftforge.net/net/minecraftforge/forge/index_{game_version}.html"
+            )
+            tree = html.fromstring(get_html)
+
+            # 使用 XPath 精确匹配表格，并提取 td 的直接文本
+            version_tds = tree.xpath('//table[contains(@class, "download-list")]/tbody/tr/td[contains(@class, "download-version")]')
+            for td in version_tds:
+                # 提取直接文本节点，忽略子元素（图标等）
+                text_nodes = td.xpath("./text()")
+                if text_nodes:
+                    version = text_nodes[0].strip()
+                    if version:  # 过滤空字符串
+                        versions.append({
+                            "LoaderVersion": version,
+                            "GameVersion": game_version_id
+                        })
+            return versions
+
+    def download_forge_installer(self, game_version_id: str, loader_version: str, save_path: Path | str) -> Path:
+        """
+        下载一个 Forge 版本的 Installer.jar
+        :param game_version_id: 游戏版本 ID
+        :param loader_version: Forge 版本 ID
+        :param save_path: 保存文件夹路径
+        :return: 保存路径
+        """
+        game_version_id = game_version_id.replace("-", "_")
+        save_path = Path(save_path)
+        url = f"{self.config.Forge}/net/minecraftforge/forge/{game_version_id}-{loader_version}/forge-{game_version_id}-{loader_version}-installer.jar"
+        try:
+            resp = self._client.head(url)
+            if resp.status_code == 404:
+                url = f"{self.config.Forge}/net/minecraftforge/forge/{game_version_id}-{loader_version}-{game_version_id}/forge-{game_version_id}-{loader_version}-{game_version_id}-installer.jar"
+        except:
+            pass
+
+        save_path = save_path / f"forge-{game_version_id}-{loader_version}-installer.jar"
         save_path.write_bytes(self._download_with_retry(url))
 
         return save_path

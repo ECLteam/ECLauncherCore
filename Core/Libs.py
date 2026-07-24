@@ -22,7 +22,7 @@ def replace_last(text: str, old: str, new: str) -> str:
 def name_to_path(name: str) -> str:
     """
     这其实不是一个公开的函数，为了调用方便罢了
-    :param name: Meta Json 中文件的 name 键值
+    :param name: Maven 的 name 键值
     :return: 正确拼接的路径
     """
     at_index = name.find("@")
