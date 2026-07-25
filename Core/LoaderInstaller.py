@@ -479,11 +479,6 @@ class LoaderInstaller:
                 version_data = json.loads(zf.read("version.json"))
             except KeyError:
                 version_data = install_profile["versionInfo"]
-                for libraries in version_data["libraries"]:
-                    if "clientreq" not in libraries and "serverreq" not in libraries:
-                        continue
-                    elif "clientreq" not in libraries or not libraries["clientreq"]:
-                        version_data["libraries"].remove(libraries)
             jar_path = install_profile.get("install", {}).get("filePath")
             if jar_path:
                 jar_path = jar_path.replace("/", "", 1)
