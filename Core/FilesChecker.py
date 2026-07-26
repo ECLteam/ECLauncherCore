@@ -27,11 +27,11 @@ class FilesChecker:
 
         if "fabric" in combined:
             return self.config.Fabric
-        if "neoforged" in combined or "neoforge" in combined:
+        elif "neoforge" in combined:
             return self.config.NeoForged
-        if "forge" in combined:
+        elif "forge" in combined:
             return self.config.Forge
-        if "quilt" in combined:
+        elif "quilt" in combined:
             return self.config.Quilt
         # 默认回退到官方 libraries 仓库
         return self.config.Libraries
@@ -67,7 +67,7 @@ class FilesChecker:
 
             lib_path = Libs.name_to_path(libraries["name"])
 
-            if lib_path == "": continue
+            if not lib_path: continue
 
             libraries_path = game_path / "libraries" / lib_path
             file_sha1 = ""
@@ -76,8 +76,8 @@ class FilesChecker:
                 file_sha1 = libraries["sha1"]
             elif "sha1" in libraries.get("downloads", {}).get("artifact", {}):
                 file_sha1 = libraries["downloads"]["artifact"]["sha1"]
-            if (not file_sha1 and libraries_path.is_file()) or Libs.get_file_sha1(
-                    libraries_path) == file_sha1: continue
+            if (not file_sha1 and libraries_path.is_file()) or Libs.get_file_sha1(libraries_path) == file_sha1:
+                continue
 
             raw_url = ""
 
@@ -114,7 +114,7 @@ class FilesChecker:
                 index_data = self.api_client.get_asset_index(asset_id, file_sha1)
                 local_index_path.parent.mkdir(parents=True, exist_ok=True)
                 local_index_path.write_text(json.dumps(index_data), encoding="utf-8")
-            except Exception:
+            except:
                 return download_list
         else:
             index_data = json.loads(local_index_path.read_text("utf-8"))

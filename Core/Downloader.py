@@ -295,7 +295,7 @@ class Downloader:
 
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temp_path = path.with_suffix(path.suffix + ".tmp")
-                with open(temp_path, "wb") as f:
+                with temp_path.open("wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size):
                         await self.pause_event.wait()
                         await self.rate_limiter.acquire(len(chunk))

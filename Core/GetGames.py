@@ -134,7 +134,7 @@ class GetGames:
             version_info = {
                 "LoaderVersion": fabric_version["loader"]["version"],
                 "GameVersion": game_version_id,
-                "Stable": is_stable,
+                "Stable": is_stable
             }
             all_versions.append(version_info)
             if is_stable:
@@ -274,9 +274,9 @@ class GetGames:
         save_path = self.game_path / "versions" / save_name / "InstallCache"
         save_path.mkdir(parents=True, exist_ok=True)
         installer_path = self.api_client.download_forge_installer(game_version_id, loader_version, save_path)
-        #installer_path = r"F:\TestMC\2\versions\1.12.2-Forge\InstallCache\forge-1.12.2-14.23.5.2864-installer.jar"
+        #installer_path = r""
         self.loader_installer.install_neoforged(installer_path, java_path, save_name)
-        #rmtree(save_path)
+        rmtree(save_path)
 
         self._save_version_info(save_name, {
             "VanillaType": mc_type,
@@ -286,4 +286,73 @@ class GetGames:
         })
 
         return self.files_checker.check_files(self.game_path, save_name)
+
+    def get_quilt_versions(self, game_version_id: str) -> dict[str, list] | None:
+        """
+        获取指定某个 Minecraft 版本可用的 Quilt 版本列表
+        :param game_version_id: 版本 ID
+        :return: Quilt 版本列表
+        """
+        quilt_support = self.api_client.get_quilt_support()
+        support_games = [ver["version"] for ver in quilt_support]
+        if game_version_id not in support_games:
+            return None
+        quilt_versions = self.api_client.get_quilt_versions()
+        all_versions = []
+        stable_versions = []
+        beta_versions = []
+        for quilt_version in quilt_versions:
+            version_name = quilt_version["version"]
+            version_info = {
+                "LoaderVersion": version_name,
+                "LoaderType": "Stable"
+            }
+            if "beta" in version_name.lower():
+                version_info["LoaderType"] = "Beta"
+                beta_versions.append(version_info)
+            all_versions.append(version_info)
+        return {
+            "All": all_versions,
+            "Stable": stable_versions,
+            "Beta": beta_versions
+        }
+
+    def build_quilt_download_list(
+        self,
+        game_version_id: str,
+        loader_version: str,
+        save_name: str | None = None
+    ) -> list[tuple[str, str]]:
+        """
+        下载指定 Minecraft 版本的指定 Quilt
+        :param game_version_id: 版本 ID
+        :param loader_version: Loader 版本
+        :param save_name: 保存名称
+        :return: 下载列表 [("URL", "PATH")]
+        """
+        save_name = save_name or f"{game_version_id}-Quilt"
+
+        mc_type = self.build_minecraft_download_list(
+            version_id=game_version_id,
+            save_name=save_name,
+            save_version_info=False
+        )[0]
+        version_data = self.api_client.get_quilt_profile(
+            game_version_id=game_version_id,
+            loader_version=loader_version
+        )
+
+        json_path = self.game_path / "versions" / save_name / f"{save_name}.json"
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(version_data, ensure_ascii=False, indent=4), encoding="utf-8")
+
+        self._save_version_info(save_name, {
+            "VanillaType": mc_type,
+            "VanillaVersion": game_version_id,
+            "LoaderType": "Quilt",
+            "LoaderVersion": loader_version
+        })
+
+        return self.files_checker.check_files(self.game_path, save_name)
+
 

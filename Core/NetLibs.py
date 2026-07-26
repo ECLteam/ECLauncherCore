@@ -19,7 +19,7 @@ class ApiUrlConfig:
     Fabric: str = "https://maven.fabricmc.net"
     FabricMeta: str = "https://meta.fabricmc.net"
     NeoForged: str = "https://maven.neoforged.net/releases"
-    Quilt: str = "https://maven.quiltmc.org"
+    Quilt: str = "https://maven.quiltmc.org/repository/release"
     QuiltMeta: str = "https://meta.quiltmc.org"
 
     def get(self, key_name: str)-> str | None:
@@ -72,8 +72,6 @@ class BmclApiUrl(ApiUrlConfig):
     Fabric: str = "https://bmclapi2.bangbang93.com/maven"
     FabricMeta: str = "https://bmclapi2.bangbang93.com/fabric-meta"
     NeoForged: str = "https://bmclapi2.bangbang93.com/maven"
-    Quilt: str = "https://bmclapi2.bangbang93.com/maven"
-    QuiltMeta: str = "https://bmclapi2.bangbang93.com/quilt-meta"
 
 
 class BaseApiClient:
@@ -173,14 +171,14 @@ class BaseApiClient:
         save_path = Path(save_path)
         save_path.write_bytes(self._download_with_retry(self.get_client_jar_url(sha1)))
 
-    def get_fabric_versions(self, version_id: str) -> list[dict]:
+    def get_fabric_versions(self, game_version_id: str) -> list[dict]:
         """
         获取指定某个 Minecraft 版本可用的 Fabric 版本列表
-        :param version_id: 版本 ID
+        :param game_version_id: 版本 ID
         :return: Fabric 版本列表
         """
         return self._get_json_with_retry(
-            f"{self.config.FabricMeta}/v2/versions/loader/{version_id}"
+            f"{self.config.FabricMeta}/v2/versions/loader/{game_version_id}"
         )
 
     def get_fabric_profile(self, game_version_id: str, loader_version: str) -> dict:
@@ -215,6 +213,7 @@ class BaseApiClient:
                         "GameVersion": version["mcversion"],
                         "LoaderType": "Stable"
                     }
+                    ver_name = ver_name.lower()
                     if "beta" in ver_name:
                         ver_info["LoaderType"] = "Beta"
                         beta_ver.append(ver_info)
@@ -236,6 +235,7 @@ class BaseApiClient:
                         "GameVersion": game_version_id,
                         "LoaderType": "Stable"
                     }
+                    version = version.lower()
                     if "beta" in version:
                         ver_info["LoaderType"] = "Beta"
                         beta_ver.append(ver_info)
@@ -259,6 +259,7 @@ class BaseApiClient:
                             "GameVersion": game_version_id,
                             "LoaderType": "Stable"
                         }
+                        version = version.lower()
                         if "beta" in version:
                             ver_info["LoaderType"] = "Beta"
                             beta_ver.append(ver_info)
@@ -354,6 +355,35 @@ class BaseApiClient:
         save_path.write_bytes(self._download_with_retry(url))
 
         return save_path
+
+    def get_quilt_support(self) -> list[dict]:
+        """
+        获取 Quilt 所支持的所有游戏版本
+        :return: Minecraft 版本列表
+        """
+        return self._get_json_with_retry(
+            f"{self.config.QuiltMeta}/v3/versions/game"
+        )
+
+    def get_quilt_versions(self) -> list[dict]:
+        """
+        获取指定某个 Minecraft 版本可用的 Quilt 版本列表
+        :return: Quilt 版本列表
+        """
+        return self._get_json_with_retry(
+            f"{self.config.QuiltMeta}/v3/versions/loader"
+        )
+
+    def get_quilt_profile(self, game_version_id: str, loader_version: str) -> dict:
+        """
+        获取一个 Quilt 版本的 Meta Json
+        :param game_version_id: 游戏版本 ID
+        :param loader_version: Quilt 版本 ID
+        :return: Meta Json
+        """
+        return self._get_json_with_retry(
+            f"{self.config.QuiltMeta}/v3/versions/loader/{game_version_id}/{loader_version}/profile/json"
+        )
 
     def close(self) -> None:
         """
