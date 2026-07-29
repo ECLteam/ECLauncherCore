@@ -96,7 +96,7 @@ def find_version(version_json: dict, game_path: Path | str, version_name: str | 
     查找 Meta Json 的 inheritsFrom 键值对应游戏版本
     :param version_json: Meta Json 内容
     :param game_path: .minecraft 路径
-    :param version_name: 可选, 这是为了适配版本合并
+    :param version_name: 这是为了适配版本合并
     :return: None 为没找到, 或对应版本 (MetaJson内容, 路径)
     """
     game_path = Path(game_path)
