@@ -7,6 +7,10 @@ import re
 
 class SearchMinecraft:
     def __init__(self, game_path: Path | str):
+        """
+        初始化
+        :param game_path: .minecraft 路径
+        """
         self.game_path = Path(game_path)
 
     @staticmethod
@@ -118,7 +122,7 @@ class SearchMinecraft:
                             return "a" + version[len("Alpha v"):]
                         return version
                     return "Unknown"
-            except KeyError:
+            except (KeyError, ValueError):
                 pass
             try:
                 with zf.open("net/minecraft/server/MinecraftServer.class", "r") as stream:
@@ -135,7 +139,7 @@ class SearchMinecraft:
                         for i in range(can_keep_up_idx - 1, -1, -1):
                             if version_pattern.match(utf8_strings[i]):
                                 return utf8_strings[i]
-            except KeyError:
+            except (KeyError, ValueError):
                 pass
             return None
 
@@ -206,13 +210,13 @@ class SearchMinecraft:
         elif loader_type == "Forge":
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] == "forge":
+                if split_name[1].lower() == "forge":
                     if "-" in split_name[2]:
                         split_ver = split_name[2].split("-")
                         if len(split_ver) >= 2:
                             return split_ver[1]
                     return split_name[2]
-                elif split_name[1] == "fmlloader":
+                elif split_name[1].lower() == "fmlloader":
                     if "-" in split_name[2]:
                         split_ver = split_name[2].split("-")
                         if len(split_ver) >= 2:
@@ -221,17 +225,17 @@ class SearchMinecraft:
         elif loader_type in ("Fabric", "LegacyFabric"):
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] in ("fabric", "fabric-loader"):
+                if split_name[1].lower() in ("fabric", "fabric-loader"):
                     return split_name[2]
         elif loader_type == "Quilt":
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] in ("quilt", "quilt-loader"):
+                if split_name[1].lower() in ("quilt", "quilt-loader"):
                     return split_name[2]
         elif loader_type == "OptiFine":
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] == "optifine":
+                if split_name[1].lower() == "optifine":
                     if "-" in split_name[2]:
                         split_ver = split_name[2].split("-")
                         if len(split_ver) >= 2:
@@ -240,16 +244,17 @@ class SearchMinecraft:
         elif loader_type == "LiteLoader":
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] == "liteloader":
+                if split_name[1].lower() == "liteloader":
                     return split_name[2]
         elif loader_type == "Cleanroom":
             for lib in version_json["libraries"]:
                 split_name = lib["name"].split(":")
-                if split_name[1] == "cleanroom":
+                if split_name[1].lower() == "cleanroom":
                     return split_name[2]
         return "Unknown"
 
     def search_minecraft(self):
+        """搜索路径中的所有 Minecraft 版本"""
         versions = {}
         versions_path = self.game_path / "versions"
         for version_dir in versions_path.iterdir():
@@ -275,43 +280,44 @@ class SearchMinecraft:
                 "RequestJava": "Unknown"
             }
             ver_json = version_dir / f"{version_dir.name}.json"
-            if ver_json.is_file():
-                version_json: dict = json.loads(ver_json.read_text("utf-8"))
-                if "inheritsFrom" in version_json:
-                    game_jar = version_dir / f"{version_json["inheritsFrom"]}.jar"
-                    if game_jar.is_file():
-                        game_ver = self._find_game_ver_from_jar(game_jar)
-                        if game_ver:
-                            info["VanillaVersion"] = game_ver
+            if not ver_json.is_file():
+                continue
+            version_json: dict = json.loads(ver_json.read_text("utf-8"))
+            if "inheritsFrom" in version_json:
+                game_jar = version_dir / f"{version_json["inheritsFrom"]}.jar"
+                if game_jar.is_file():
+                    game_ver = self._find_game_ver_from_jar(game_jar)
+                    if game_ver:
+                        info["VanillaVersion"] = game_ver
 
-                game_json = Libs.find_version(version_json, self.game_path, version_dir.name)
-                if game_json:
-                    game_jar= game_json[1] / f"{game_json[1].name}.jar"
-                    if game_jar.is_file():
-                        game_ver = self._find_game_ver_from_jar(game_jar)
-                        if game_ver:
-                            info["VanillaVersion"] = game_ver
-                else:
-                    ver_jar = version_dir / f"{version_dir.name}.jar"
-                    if ver_jar.is_file():
-                        game_ver = self._find_game_ver_from_jar(ver_jar)
-                        if game_ver:
-                            info["VanillaVersion"] = game_ver
+            game_json = Libs.find_version(version_json, self.game_path, version_dir.name)
+            if game_json:
+                game_jar= game_json[1] / f"{game_json[1].name}.jar"
+                if game_jar.is_file():
+                    game_ver = self._find_game_ver_from_jar(game_jar)
+                    if game_ver:
+                        info["VanillaVersion"] = game_ver
+            else:
+                ver_jar = version_dir / f"{version_dir.name}.jar"
+                if ver_jar.is_file():
+                    game_ver = self._find_game_ver_from_jar(ver_jar)
+                    if game_ver:
+                        info["VanillaVersion"] = game_ver
 
-                if info["VanillaVersion"] == "Unknown":
-                    game_args: list | None = version_json.get("arguments", {}).get("game")
-                    if game_args:
-                        args_iter = iter(game_args)
-                        for arg in args_iter:
-                            if arg == "--fml.mcVersion":
-                                info["VanillaVersion"] = next(args_iter)
+            if info["VanillaVersion"] == "Unknown":
+                game_args: list | None = version_json.get("arguments", {}).get("game")
+                if game_args:
+                    args_iter = iter(game_args)
+                    for arg in args_iter:
+                        if arg == "--fml.mcVersion":
+                            info["VanillaVersion"] = next(args_iter)
 
-                loader_type = self._find_loader_type(version_json)
-                if loader_type:
-                    info["LoaderType"] = loader_type
-                    info["LoaderVersion"] = self._find_loader_version(version_json, loader_type)
-                info["VanillaType"] = self._find_minecraft_type(version_json, version_dir.name, info["VanillaVersion"])
-                info["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
+            loader_type = self._find_loader_type(version_json)
+            if loader_type:
+                info["LoaderType"] = loader_type
+                info["LoaderVersion"] = self._find_loader_version(version_json, loader_type)
+            info["VanillaType"] = self._find_minecraft_type(version_json, version_dir.name, info["VanillaVersion"])
+            info["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
 
             versions[version_dir.name] = info
         # print(json.dumps(versions, ensure_ascii=False, indent=4))
