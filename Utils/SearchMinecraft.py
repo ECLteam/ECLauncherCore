@@ -1,6 +1,5 @@
 from pathlib import Path
-#from . import Libs
-import Libs
+from . import Libs
 import zipfile
 import json
 import re
@@ -193,11 +192,62 @@ class SearchMinecraft:
             return "LiteLoader"
         elif "cleanroom" in ver_libs:
             return "Cleanroom"
+        elif "optifine" in ver_libs:
+            return "OptiFine"
         return None
 
     @staticmethod
-    def _find_loader_version(version_json: dict) -> str | None:
-        pass
+    def _find_loader_version(version_json: dict, loader_type: str) -> str:
+        if loader_type == "NeoForged":
+            args_iter = iter(list(version_json["arguments"]["game"]))
+            for arg in args_iter:
+                if arg == "--fml.neoForgeVersion":
+                    return next(args_iter)
+        elif loader_type == "Forge":
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] == "forge":
+                    if "-" in split_name[2]:
+                        split_ver = split_name[2].split("-")
+                        if len(split_ver) >= 2:
+                            return split_ver[1]
+                    return split_name[2]
+                elif split_name[1] == "fmlloader":
+                    if "-" in split_name[2]:
+                        split_ver = split_name[2].split("-")
+                        if len(split_ver) >= 2:
+                            return split_ver[1]
+                    return split_name[2]
+        elif loader_type in ("Fabric", "LegacyFabric"):
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] in ("fabric", "fabric-loader"):
+                    return split_name[2]
+        elif loader_type == "Quilt":
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] in ("quilt", "quilt-loader"):
+                    return split_name[2]
+        elif loader_type == "OptiFine":
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] == "optifine":
+                    if "-" in split_name[2]:
+                        split_ver = split_name[2].split("-")
+                        if len(split_ver) >= 2:
+                            return split_ver[1]
+                    return split_name[2]
+        elif loader_type == "LiteLoader":
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] == "liteloader":
+                    return split_name[2]
+        elif loader_type == "Cleanroom":
+            for lib in version_json["libraries"]:
+                split_name = lib["name"].split(":")
+                if split_name[1] == "cleanroom":
+                    return split_name[2]
+        return "Unknown"
 
     def search_minecraft(self):
         versions = {}
@@ -259,13 +309,10 @@ class SearchMinecraft:
                 loader_type = self._find_loader_type(version_json)
                 if loader_type:
                     info["LoaderType"] = loader_type
+                    info["LoaderVersion"] = self._find_loader_version(version_json, loader_type)
                 info["VanillaType"] = self._find_minecraft_type(version_json, version_dir.name, info["VanillaVersion"])
                 info["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
 
             versions[version_dir.name] = info
-        print(json.dumps(versions, ensure_ascii=False, indent=4))
+        # print(json.dumps(versions, ensure_ascii=False, indent=4))
         return versions
-
-
-sm = SearchMinecraft(r"E:\MC")
-sm.search_minecraft()

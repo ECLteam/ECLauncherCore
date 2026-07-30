@@ -582,7 +582,7 @@ class MicrosoftAuthManager:
 
     def close(self) -> None:
         """释放内部 HTTP 客户端资源"""
-        if hasattr(self, 'minecraft_client') and self.minecraft_client:
+        if hasattr(self, "minecraft_client") and self.minecraft_client:
             self.minecraft_client.close()
             self.minecraft_client = None
 
