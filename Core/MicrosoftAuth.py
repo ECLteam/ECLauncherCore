@@ -363,7 +363,7 @@ class MicrosoftAuthManager:
     def __init__(
         self,
         client_id: str = "f1709935-df0b-400c-843a-530a77fb8d3c",
-        cache_path: Path | str = "~/.ECL",
+        cache_path: Path | str | None = None,
         on_device_code: Callable[[dict[str, str]], None] | None = None
     ):
         """
@@ -372,7 +372,7 @@ class MicrosoftAuthManager:
         :param on_device_code: 设备码回调函数
         """
         self.client_id = client_id
-        self.cache_path = Path(cache_path).expanduser()
+        self.cache_path = Path(cache_path) if cache_path else Path.home() / ".ECL"
         self.cache_path.mkdir(parents=True, exist_ok=True)
         self.on_device_code = on_device_code
 
