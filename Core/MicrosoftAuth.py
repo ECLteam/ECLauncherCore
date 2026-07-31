@@ -362,7 +362,7 @@ class MinecraftClient:
 class MicrosoftAuthManager:
     def __init__(
         self,
-        client_id: str = "f1709935-df0b-400c-843a-530a77fb8d3c",
+        client_id: str,
         cache_path: Path | str | None = None,
         on_device_code: Callable[[dict[str, str]], None] | None = None
     ):
