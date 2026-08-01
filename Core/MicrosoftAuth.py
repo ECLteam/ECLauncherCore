@@ -2,7 +2,6 @@ from typing import Callable
 from threading import Lock
 from pathlib import Path
 from uuid import uuid4
-import base64
 import copy
 import httpx
 import json
@@ -225,28 +224,6 @@ class MinecraftClient:
         except Exception as e:
             raise MinecraftAuthError(e) from e
 
-    def get_skin(self, mc_uuid: str) -> dict:
-        """
-        获取一个指定 UUID 的皮肤
-        :param mc_uuid: Minecraft UUID
-        :return: Minecraft Skin Information
-        """
-        url = f"https://sessionserver.mojang.com/session/minecraft/profile/{mc_uuid}"
-        try:
-            resp = self.client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-            properties = []
-            for p in data.get("properties", []):
-                decoded = json.loads(base64.b64decode(p["value"]))
-                p_copy = p.copy()
-                p_copy["value"] = decoded
-                properties.append(p_copy)
-            data["properties"] = properties
-            return data
-        except Exception as e:
-            raise GetSkinError(e) from e
-
     def upload_skin(self, minecraft_token: str, variant: str, png_image: bytes):
         """
         上传皮肤
@@ -446,14 +423,10 @@ class MicrosoftAuthManager:
             if not mc_profile:
                 raise MinecraftAuthError("未购买 Minecraft Java 版")
 
-            # 获取皮肤信息
-            skin_info = self.minecraft_client.get_skin(mc_profile["id"])
-
             self.microsoft_accounts[account_id] = {
                 "AccountId": account_id,
                 "Email": email,
-                "Profile": mc_profile,
-                "Skin": skin_info
+                "Profile": mc_profile
             }
             self.microsoft_clients[account_id] = ms_client
             self.minecraft_tokens[account_id] = mc_token_tuple
@@ -524,22 +497,11 @@ class MicrosoftAuthManager:
         if not profile:
             raise MinecraftAuthError(f"无法获取账户 '{account_id}' 的档案")
 
-        skin_info = self.minecraft_client.get_skin(profile["id"])
-
         with self._lock:
             self.microsoft_accounts[account_id]["Profile"] = profile
-            self.microsoft_accounts[account_id]["Skin"] = skin_info
             self._save_account_list()
 
-        return {"Profile": profile, "Skin": skin_info}
-
-    def get_skin(self, mc_uuid: str) -> dict:
-        """
-        获取一个指定 UUID 的皮肤
-        :param mc_uuid: Minecraft UUID
-        :return: Minecraft Skin Information
-        """
-        return self.minecraft_client.get_skin(mc_uuid)
+        return {"Profile": profile}
 
     def upload_skin(self, account_id: str, variant: str, png_image: bytes) -> dict:
         """
