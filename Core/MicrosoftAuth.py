@@ -46,6 +46,9 @@ class UpdateSkinError(NetException):
     """更新皮肤失败"""
     pass
 
+class SetNameError(NetException):
+    pass
+
 
 # ---------- 微软认证（纯 OAuth） ----------
 class MicrosoftAuth:
@@ -323,6 +326,33 @@ class MinecraftClient:
         except Exception as e:
             raise UpdateSkinError(e) from e
 
+    def set_profile_name(self, minecraft_token: str, new_name: str) -> dict:
+        """
+        [!未测试, 是否能使用以及返回内容未知!]
+        设置 Minecraft Java profile 名称
+        :param minecraft_token: Minecraft Token
+        :param new_name: 新名称
+        :return: Profile?
+        """
+        url = f"https://api.minecraftservices.com/minecraft/profile/name/{new_name}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {minecraft_token}"
+        }
+
+        try:
+            resp = self.client.put(url, headers=headers)
+            if resp.status_code == 400:
+                print(resp.json())
+                raise SetNameError("用户名无效")
+            elif resp.status_code == 403:
+                print(resp.json())
+                raise SetNameError("距离上次修改不足30天或处在冷却期或该用户名已被占用")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise SetNameError(e) from e
+
     def close(self):
         """关闭 HTTP 客户端"""
         if hasattr(self, "client"):
@@ -541,6 +571,17 @@ class MicrosoftAuthManager:
         """
         mc_token = self.get_minecraft_token(account_id, refresh_profile=False)
         return self.minecraft_client.reset_cape(mc_token)
+
+    def set_profile_name(self, account_id: str, new_name: str) -> dict:
+        """
+        [!未测试, 是否能使用以及返回内容未知!]
+        设置 Minecraft Java profile 名称
+        :param account_id: 账户 ID
+        :param new_name: 新名称
+        :return: Profile?
+        """
+        mc_token = self.get_minecraft_token(account_id, refresh_profile=False)
+        return self.minecraft_client.set_profile_name(mc_token, new_name)
 
     def close(self) -> None:
         """释放内部 HTTP 客户端资源"""
