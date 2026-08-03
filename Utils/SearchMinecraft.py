@@ -258,67 +258,70 @@ class SearchMinecraft:
         versions = {}
         versions_path = self.game_path / "versions"
         for version_dir in versions_path.iterdir():
-            if not version_dir.is_dir():
-                continue
-            ver_info = version_dir / "VersionInfo.json"
-            if ver_info.is_file():
-                try:
-                    info_json = json.loads(ver_info.read_text("utf-8"))
-                    if "VanillaVersion" in info_json:
-                        info_json["VersionPath"] = str(version_dir)
-                        version_json = json.loads((version_dir / f"{version_dir.name}.json").read_text("utf-8"))
-                        info_json["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
-                        versions[version_dir.name] = info_json
-                        continue
-                except json.decoder.JSONDecodeError:
-                    pass
+            try:
+                if not version_dir.is_dir():
+                    continue
+                ver_info = version_dir / "VersionInfo.json"
+                if ver_info.is_file():
+                    try:
+                        info_json = json.loads(ver_info.read_text("utf-8"))
+                        if "VanillaVersion" in info_json:
+                            info_json["VersionPath"] = str(version_dir)
+                            version_json = json.loads((version_dir / f"{version_dir.name}.json").read_text("utf-8"))
+                            info_json["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
+                            versions[version_dir.name] = info_json
+                            continue
+                    except json.decoder.JSONDecodeError:
+                        pass
 
-            info = {
-                "VanillaType": "Unknown",
-                "VanillaVersion": "Unknown",
-                "VersionPath": str(version_dir),
-                "RequestJava": "Unknown"
-            }
-            ver_json = version_dir / f"{version_dir.name}.json"
-            if not ver_json.is_file():
-                continue
-            version_json: dict = json.loads(ver_json.read_text("utf-8"))
-            if "inheritsFrom" in version_json:
-                game_jar = version_dir / f"{version_json["inheritsFrom"]}.jar"
-                if game_jar.is_file():
-                    game_ver = self._find_game_ver_from_jar(game_jar)
-                    if game_ver:
-                        info["VanillaVersion"] = game_ver
+                info = {
+                    "VanillaType": "Unknown",
+                    "VanillaVersion": "Unknown",
+                    "VersionPath": str(version_dir),
+                    "RequestJava": "Unknown"
+                }
+                ver_json = version_dir / f"{version_dir.name}.json"
+                if not ver_json.is_file():
+                    continue
+                version_json: dict = json.loads(ver_json.read_text("utf-8"))
+                if "inheritsFrom" in version_json:
+                    game_jar = version_dir / f"{version_json["inheritsFrom"]}.jar"
+                    if game_jar.is_file():
+                        game_ver = self._find_game_ver_from_jar(game_jar)
+                        if game_ver:
+                            info["VanillaVersion"] = game_ver
 
-            game_json = Libs.find_version(version_json, self.game_path, version_dir.name)
-            if game_json:
-                game_jar= game_json[1] / f"{game_json[1].name}.jar"
-                if game_jar.is_file():
-                    game_ver = self._find_game_ver_from_jar(game_jar)
-                    if game_ver:
-                        info["VanillaVersion"] = game_ver
-            else:
-                ver_jar = version_dir / f"{version_dir.name}.jar"
-                if ver_jar.is_file():
-                    game_ver = self._find_game_ver_from_jar(ver_jar)
-                    if game_ver:
-                        info["VanillaVersion"] = game_ver
+                game_json = Libs.find_version(version_json, self.game_path, version_dir.name)
+                if game_json:
+                    game_jar= game_json[1] / f"{game_json[1].name}.jar"
+                    if game_jar.is_file():
+                        game_ver = self._find_game_ver_from_jar(game_jar)
+                        if game_ver:
+                            info["VanillaVersion"] = game_ver
+                else:
+                    ver_jar = version_dir / f"{version_dir.name}.jar"
+                    if ver_jar.is_file():
+                        game_ver = self._find_game_ver_from_jar(ver_jar)
+                        if game_ver:
+                            info["VanillaVersion"] = game_ver
 
-            if info["VanillaVersion"] == "Unknown":
-                game_args: list | None = version_json.get("arguments", {}).get("game")
-                if game_args:
-                    args_iter = iter(game_args)
-                    for arg in args_iter:
-                        if arg == "--fml.mcVersion":
-                            info["VanillaVersion"] = next(args_iter)
+                if info["VanillaVersion"] == "Unknown":
+                    game_args: list | None = version_json.get("arguments", {}).get("game")
+                    if game_args:
+                        args_iter = iter(game_args)
+                        for arg in args_iter:
+                            if arg == "--fml.mcVersion":
+                                info["VanillaVersion"] = next(args_iter)
 
-            loader_type = self._find_loader_type(version_json)
-            if loader_type:
-                info["LoaderType"] = loader_type
-                info["LoaderVersion"] = self._find_loader_version(version_json, loader_type)
-            info["VanillaType"] = self._find_minecraft_type(version_json, version_dir.name, info["VanillaVersion"])
-            info["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
+                loader_type = self._find_loader_type(version_json)
+                if loader_type:
+                    info["LoaderType"] = loader_type
+                    info["LoaderVersion"] = self._find_loader_version(version_json, loader_type)
+                info["VanillaType"] = self._find_minecraft_type(version_json, version_dir.name, info["VanillaVersion"])
+                info["RequestJava"] = self._find_minecraft_req_java(version_json, version_dir.name)
 
-            versions[version_dir.name] = info
+                versions[version_dir.name] = info
+            except:
+                pass
         # print(json.dumps(versions, ensure_ascii=False, indent=4))
         return versions
