@@ -231,12 +231,12 @@ class YggdrasilAuthManager:
                     }
                     self._save_account_cache(account_id, token_info)
 
+                    refresh_info.pop("accessToken", None)
+                    refresh_info.pop("clientToken", None)
                     info = {
                         "AccountId": account_id,
                         "YggdrasilAPI": info["YggdrasilAPI"],
-                        "AvailableProfiles": refresh_info["availableProfiles"],
-                        "SelectedProfile": refresh_info["selectedProfile"],
-                        "User": refresh_info["user"]
+                        "Profiles": refresh_info
                     }
                 self.yggdrasil_tokens[account_id] = token_info
                 self.yggdrasil_accounts[account_id] = info
@@ -283,12 +283,12 @@ class YggdrasilAuthManager:
             self._save_account_cache(account_id, token_info)
             self.yggdrasil_tokens[account_id] = token_info
 
+            auth_info.pop("accessToken", None)
+            auth_info.pop("clientToken", None)
             self.yggdrasil_accounts[account_id] = {
                 "AccountId": account_id,
                 "YggdrasilAPI": root_url,
-                "AvailableProfiles": auth_info["availableProfiles"],
-                "SelectedProfile": auth_info["selectedProfile"],
-                "User": auth_info["user"]
+                "Profiles": auth_info
             }
             self._save_account_list()
             return account_id
@@ -339,12 +339,12 @@ class YggdrasilAuthManager:
             self._save_account_cache(account_id, token_info)
             self.yggdrasil_tokens[account_id] = token_info
 
+            refresh_info.pop("accessToken", None)
+            refresh_info.pop("clientToken", None)
             account_info = {
                 "AccountId": account_id,
                 "YggdrasilAPI": account_info["YggdrasilAPI"],
-                "AvailableProfiles": refresh_info["availableProfiles"],
-                "SelectedProfile": refresh_info["selectedProfile"],
-                "User": refresh_info["user"]
+                "Profiles": refresh_info
             }
             self.yggdrasil_accounts[account_id] = account_info
             self._save_account_list()
