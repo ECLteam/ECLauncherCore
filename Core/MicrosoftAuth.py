@@ -380,6 +380,7 @@ class MicrosoftAuthManager:
         """
         self.client_id = client_id
         self.cache_path = Path(cache_path) if cache_path else Path.home() / ".ECL"
+        self.cache_path = self.cache_path / "accounts"
         self.cache_path.mkdir(parents=True, exist_ok=True)
         self.on_device_code = on_device_code
 
