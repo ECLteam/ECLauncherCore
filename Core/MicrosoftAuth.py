@@ -402,18 +402,18 @@ class MicrosoftAuthManager:
         """从文件加载账户列表，重建 MicrosoftAuth 客户端"""
         if not self.account_list_file.exists():
             return
-        try:
-            data = json.loads(self.account_list_file.read_text(encoding="utf-8"))
-            for account_id, info in data.items():
-                self.microsoft_accounts[account_id] = info
+        data = json.loads(self.account_list_file.read_text(encoding="utf-8"))
+        for account_id, info in data.items():
+            try:
                 ms_client = MicrosoftAuth(
                     client_id=self.client_id,
                     cache_file=self.account_cache_path / f"{account_id}.json",
                     on_device_code=self.on_device_code
                 )
+                self.microsoft_accounts[account_id] = info
                 self.microsoft_clients[account_id] = ms_client
-        except Exception as e:
-            raise MicrosoftAuthError(e) from e
+            except:
+                pass
 
     def _save_account_list(self) -> None:
         """保存账户列表到文件"""
