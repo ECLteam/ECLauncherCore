@@ -1,8 +1,8 @@
 from typing import Callable
 from threading import Lock
+from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
-import copy
 import httpx
 import json
 import time
@@ -400,7 +400,7 @@ class MicrosoftAuthManager:
     # ---------- 内部辅助 ----------
     def _load_accounts(self) -> None:
         """从文件加载账户列表，重建 MicrosoftAuth 客户端"""
-        if not self.account_list_file.exists():
+        if not self.account_list_file.is_file():
             return
         data = json.loads(self.account_list_file.read_text(encoding="utf-8"))
         for account_id, info in data.items():
@@ -433,7 +433,7 @@ class MicrosoftAuthManager:
         :return: Microsoft Accounts
         """
         with self._lock:
-            return copy.deepcopy(self.microsoft_accounts)
+            return deepcopy(self.microsoft_accounts)
 
     def add_microsoft_account(self) -> str:
         """
