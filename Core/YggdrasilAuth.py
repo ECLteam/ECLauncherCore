@@ -200,7 +200,7 @@ class YggdrasilAuthManager:
         self._load_accounts()
 
     def _load_accounts(self) -> None:
-        """从文件加载账户列表，重建 MicrosoftAuth 客户端"""
+        """从文件加载账户列表"""
         if not self.account_list_file.is_file():
             return
         data = json.loads(self.account_list_file.read_text(encoding="utf-8"))
