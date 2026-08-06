@@ -1,6 +1,7 @@
 from urllib.parse import urlparse, urlunparse
 from base64 import b64decode
 from threading import Lock
+from hashlib import sha256
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
@@ -421,3 +422,26 @@ class YggdrasilAuthManager:
 
     def __exit__(self):
         self.close()
+
+
+def check_download_authlib(save_path: Path | str, download_source: str = "Official") -> bool:
+    save_path = Path(save_path)
+
+    base_url = "https://authlib-injector.yushi.moe"
+    if download_source == "BMCLapi":
+        base_url = "https://bmclapi2.bangbang93.com/mirrors/authlib-injector"
+
+    resp = httpx.get(f"{base_url}/artifact/latest.json")
+    resp.raise_for_status()
+    info = resp.json()
+
+    if save_path.is_file() and sha256(save_path.read_bytes()).hexdigest() == info["checksums"]["sha256"]:
+        return True
+
+    resp = httpx.get(info["download_url"])
+    resp.raise_for_status()
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path.write_bytes(resp.content)
+
+    return True
