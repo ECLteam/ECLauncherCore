@@ -355,4 +355,3 @@ class GetGames:
 
         return self.files_checker.check_files(self.game_path, save_name)
 
-

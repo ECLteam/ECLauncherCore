@@ -124,6 +124,7 @@ class LoaderInstaller:
                 instance_type="LoaderInstaller",
                 args=args,
                 cwd=installer_path.parent,
+                block_thread=True
             )
         return True
 
