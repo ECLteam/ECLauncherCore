@@ -425,10 +425,16 @@ class YggdrasilAuthManager:
 
 
 def check_download_authlib(save_path: Path | str, download_source: str = "Official") -> bool:
+    """
+    检查下载 Authlib-Injector
+    :param save_path: 文件存储路径
+    :param download_source: 下载源, 可选 "bmclapi", 填其他任何值都是官方
+    :return: 检查为最新或下载完成返回 True, 出现问题会抛异常
+    """
     save_path = Path(save_path)
 
     base_url = "https://authlib-injector.yushi.moe"
-    if download_source == "BMCLapi":
+    if download_source.lower() == "bmclapi":
         base_url = "https://bmclapi2.bangbang93.com/mirrors/authlib-injector"
 
     resp = httpx.get(f"{base_url}/artifact/latest.json")
