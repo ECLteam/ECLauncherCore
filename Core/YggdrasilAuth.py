@@ -1,4 +1,5 @@
 from urllib.parse import urlparse, urlunparse
+from base64 import b64decode
 from threading import Lock
 from copy import deepcopy
 from pathlib import Path
@@ -13,7 +14,10 @@ class YggdrasilClient:
             http2=True,
             timeout=httpx.Timeout(15, connect=10),
             follow_redirects=True,
-            headers={"Content-Type": "application/json", "Accept": "application/json"}
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
         )
 
     @staticmethod
@@ -170,6 +174,24 @@ class YggdrasilClient:
             return True
         return False
 
+    def get_skin(self, url: str, user_uuid: str, follow_ali: bool = True) -> dict:
+        root_url = self.follow_ali(url) if follow_ali else url.strip("/")
+        skin_url = f"{root_url}/sessionserver/session/minecraft/profile/{user_uuid}"
+
+        resp = self.client.get(skin_url)
+        resp.raise_for_status()
+
+        skin_info = resp.json()
+        properties = []
+        for skin_property in skin_info["properties"]:
+            properties.append({
+                "name": skin_property["name"],
+                "value": json.loads(b64decode(skin_property["value"]))
+            })
+        skin_info["properties"] = properties
+
+        return skin_info
+
     def close(self):
         """关闭 HTTP 客户端"""
         if hasattr(self, "client"):
@@ -236,7 +258,12 @@ class YggdrasilAuthManager:
                     info = {
                         "AccountId": account_id,
                         "YggdrasilAPI": info["YggdrasilAPI"],
-                        "Profiles": refresh_info
+                        "Profiles": refresh_info,
+                        "SelectedSkin": self.yggdrasil_client.get_skin(
+                            url=info["YggdrasilAPI"],
+                            user_uuid=refresh_info["selectedProfile"]["id"],
+                            follow_ali=False
+                        )
                     }
                 self.yggdrasil_tokens[account_id] = token_info
                 self.yggdrasil_accounts[account_id] = info
@@ -288,7 +315,12 @@ class YggdrasilAuthManager:
             self.yggdrasil_accounts[account_id] = {
                 "AccountId": account_id,
                 "YggdrasilAPI": root_url,
-                "Profiles": auth_info
+                "Profiles": auth_info,
+                "SelectedSkin": self.yggdrasil_client.get_skin(
+                    url=root_url,
+                    user_uuid=auth_info["selectedProfile"]["id"],
+                    follow_ali=False
+                )
             }
             self._save_account_list()
             return account_id
@@ -344,7 +376,12 @@ class YggdrasilAuthManager:
             account_info = {
                 "AccountId": account_id,
                 "YggdrasilAPI": account_info["YggdrasilAPI"],
-                "Profiles": refresh_info
+                "Profiles": refresh_info,
+                "SelectedSkin": self.yggdrasil_client.get_skin(
+                    url=account_info["YggdrasilAPI"],
+                    user_uuid=refresh_info["selectedProfile"]["id"],
+                    follow_ali=False
+                )
             }
             self.yggdrasil_accounts[account_id] = account_info
             self._save_account_list()
