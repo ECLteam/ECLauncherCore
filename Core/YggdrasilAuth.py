@@ -1,7 +1,7 @@
 from urllib.parse import urlparse, urlunparse
+from hashlib import sha256, md5
 from base64 import b64decode
 from threading import Lock
-from hashlib import sha256
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
@@ -216,7 +216,7 @@ class YggdrasilAuthManager:
         self.account_cache_path.mkdir(parents=True, exist_ok=True)
 
         self.yggdrasil_accounts: dict[str, dict] = {}   # account_id -> 账户信息
-        self.yggdrasil_tokens: dict[str, dict[str, str]] = {}  # account_id -> (access_token, client_token)
+        self.yggdrasil_tokens: dict[str, dict[str, str]] = {}  # token_id -> (access_token, client_token)
         self.yggdrasil_client = YggdrasilClient()
 
         self._lock = Lock()
@@ -229,7 +229,8 @@ class YggdrasilAuthManager:
         data = json.loads(self.account_list_file.read_text(encoding="utf-8"))
         for account_id, info in data.items():
             try:
-                token_info_path = self.account_cache_path / f"{account_id}.json"
+                token_id = self._get_token_id(info["UserName"], info["YggdrasilAPI"])
+                token_info_path = self.account_cache_path / f"{token_id}.json"
                 if not token_info_path.is_file():
                     continue
                 token_info = json.loads(
@@ -252,22 +253,10 @@ class YggdrasilAuthManager:
                         "AccessToken": refresh_info["accessToken"],
                         "ClientToken": refresh_info["clientToken"]
                     }
-                    self._save_account_cache(account_id, token_info)
+                    self._save_account_cache(token_id, token_info)
 
-                    refresh_info.pop("accessToken", None)
-                    refresh_info.pop("clientToken", None)
-                    info = {
-                        "AccountId": account_id,
-                        "YggdrasilAPI": info["YggdrasilAPI"],
-                        "Profiles": refresh_info,
-                        "SelectedSkin": self.yggdrasil_client.get_skin(
-                            url=info["YggdrasilAPI"],
-                            user_uuid=refresh_info["selectedProfile"]["id"],
-                            follow_ali=False
-                        )
-                    }
                 self.yggdrasil_tokens[account_id] = token_info
-                self.yggdrasil_accounts[account_id] = info
+                self.yggdrasil_accounts[token_id] = info
             except:
                 pass
         self._save_account_list()
@@ -278,11 +267,15 @@ class YggdrasilAuthManager:
             encoding="utf-8"
         )
 
-    def _save_account_cache(self, account_id: str, data) -> None:
-        (self.account_cache_path / f"{account_id}.json").write_text(
+    def _save_account_cache(self, save_name: str, data) -> None:
+        (self.account_cache_path / f"{save_name}.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+
+    @staticmethod
+    def _get_token_id(username: str, api_url: str) -> str:
+        return md5(f"[{username}]@{api_url}".encode("utf-8")).hexdigest()
 
     def get_yggdrasil_accounts(self) -> dict:
         """
@@ -292,47 +285,89 @@ class YggdrasilAuthManager:
         with self._lock:
             return deepcopy(self.yggdrasil_accounts)
 
-    def add_yggdrasil_account(self, url: str, username: str, password: str) -> str:
-        with self._lock:
-            root_url = self.yggdrasil_client.follow_ali(url)
+    def auth_yggdrasil_account(self, url: str, username: str, password: str) -> dict:
+        """
+        登录 Yggdrasil (不会添加)
+        :param url: 提供 Yggdrasil 登录的网站 URL
+        :param username: 用户名
+        :param password: 密码
+        :return: 返回账户信息(注意, 包含 Token, 传给前端的内容应该去除 Token)
+        """
+        root_url = self.yggdrasil_client.follow_ali(url)
 
-            account_id = uuid4().hex
-            auth_info = self.yggdrasil_client.auth(
-                url=root_url,
-                username=username,
-                password=password,
-                follow_ali=False,
-                client_token=account_id
-            )
+        auth_info = self.yggdrasil_client.auth(
+            url=root_url,
+            username=username,
+            password=password,
+            follow_ali=False,
+            client_token=md5(username.encode("utf-8")).hexdigest()
+        )
+
+        auth_info["YggdrasilAPI"] = root_url
+        auth_info["UserName"] = username
+
+        return auth_info
+
+    def add_yggdrasil_account(self, auth_info: dict, auth_uuid: str) -> str:
+        """
+        添加 Yggdrasil 账户
+        :param auth_info: 账户信息(需要包含 Token 等信息)
+        :param auth_uuid: 选择登录角色的 UUID
+        :return: 账户 ID
+        """
+        with self._lock:
+            if auth_uuid not in auth_info["availableProfiles"]:
+                raise KeyError(f"账户中不存在角色 '{auth_uuid}'")
+
             token_info = {
                 "AccessToken": auth_info["accessToken"],
                 "ClientToken": auth_info["clientToken"]
             }
-            self._save_account_cache(account_id, token_info)
-            self.yggdrasil_tokens[account_id] = token_info
 
+            token_id = self._get_token_id(auth_info["UserName"], auth_info["YggdrasilAPI"])
+            self._save_account_cache(token_id, token_info)
+            self.yggdrasil_tokens[token_id] = token_info
             auth_info.pop("accessToken", None)
             auth_info.pop("clientToken", None)
-            self.yggdrasil_accounts[account_id] = {
+
+            for profile in auth_info["availableProfiles"]:
+                if profile["id"] != auth_uuid:
+                    continue
+                auth_info["selectedProfile"] = profile
+            if "selectedProfile" not in auth_info:
+                auth_info["selectedProfile"] = auth_info["availableProfiles"][0]
+
+            auth_info.pop("availableProfiles", None)
+            account_id = uuid4().hex
+            root_url = auth_info["YggdrasilAPI"]
+            username = auth_info["UserName"]
+            auth_info.pop("YggdrasilAPI", None)
+            auth_info.pop("UserName", None)
+
+            account_info = {
                 "AccountId": account_id,
                 "YggdrasilAPI": root_url,
-                "Profiles": auth_info,
-                "SelectedSkin": self.yggdrasil_client.get_skin(
-                    url=root_url,
-                    user_uuid=auth_info["selectedProfile"]["id"],
-                    follow_ali=False
-                )
+                "UserName": username,
+                "Profiles": auth_info
             }
+            self.yggdrasil_accounts[account_id] = account_info
             self._save_account_list()
-            return account_id
 
-    def del_yggdrasil_account(self, account_id: str) -> None:
+        return account_id
+
+    def del_yggdrasil_account(self, account_id: str) -> bool:
+        """
+        删除一个账户
+        :param account_id: 账户 ID
+        :return: bool
+        """
         with self._lock:
             if account_id not in self.yggdrasil_accounts:
                 raise KeyError(f"账户 '{account_id}' 不存在")
 
             account_info = self.yggdrasil_accounts[account_id]
-            token_info = self.yggdrasil_tokens[account_id]
+            token_id = self._get_token_id(account_info["UserName"], account_info["YggdrasilAPI"])
+            token_info = self.yggdrasil_tokens[token_id]
 
             try:
                 self.yggdrasil_client.invalidate(
@@ -346,17 +381,30 @@ class YggdrasilAuthManager:
 
             self.yggdrasil_accounts.pop(account_id, None)
             self.yggdrasil_tokens.pop(account_id, None)
-            # 删除缓存文件（如果存在）
-            (self.account_cache_path / f"{account_id}.json").unlink(missing_ok=True)
-            self._save_account_list()
+            # 删除缓存文件（如果没有账户使用）
+            used_token = 0
+            for profile in self.yggdrasil_accounts.values():
+                if self._get_token_id(profile["UserName"], profile["YggdrasilAPI"]) == token_id:
+                    used_token += 1
+            if used_token <= 0:
+                (self.account_cache_path / f"{token_id}.json").unlink(missing_ok=True)
+                self._save_account_list()
 
-    def refresh_token_and_profile(self, account_id: str) -> dict:
+        return True
+
+    def refresh_token(self, account_id: str) -> bool:
+        """
+        刷新账户所使用的令牌(多个账户可能使用同一个令牌)
+        :param account_id: 账户 ID
+        :return: bool
+        """
         with self._lock:
             if account_id not in self.yggdrasil_accounts:
                 raise KeyError(f"账户 '{account_id}' 不存在")
 
             account_info = self.yggdrasil_accounts[account_id]
-            token_info = self.yggdrasil_tokens[account_id]
+            token_id = self._get_token_id(account_info["UserName"], account_info["YggdrasilAPI"])
+            token_info = self.yggdrasil_tokens[token_id]
 
             refresh_info = self.yggdrasil_client.refresh(
                 url=account_info["YggdrasilAPI"],
@@ -369,32 +417,24 @@ class YggdrasilAuthManager:
                 "AccessToken": refresh_info["accessToken"],
                 "ClientToken": refresh_info["clientToken"]
             }
-            self._save_account_cache(account_id, token_info)
-            self.yggdrasil_tokens[account_id] = token_info
+            self._save_account_cache(token_id, token_info)
+            self.yggdrasil_tokens[token_id] = token_info
 
-            refresh_info.pop("accessToken", None)
-            refresh_info.pop("clientToken", None)
-            account_info = {
-                "AccountId": account_id,
-                "YggdrasilAPI": account_info["YggdrasilAPI"],
-                "Profiles": refresh_info,
-                "SelectedSkin": self.yggdrasil_client.get_skin(
-                    url=account_info["YggdrasilAPI"],
-                    user_uuid=refresh_info["selectedProfile"]["id"],
-                    follow_ali=False
-                )
-            }
-            self.yggdrasil_accounts[account_id] = account_info
-            self._save_account_list()
-            return account_info
+        return True
 
     def get_yggdrasil_token(self, account_id: str) -> dict:
+        """
+        获取账户登录令牌
+        :param account_id: 账户 ID
+        :return: 登录需要的信息
+        """
         with self._lock:
             if account_id not in self.yggdrasil_accounts:
                 raise KeyError(f"账户 '{account_id}' 不存在")
 
             account_info = self.yggdrasil_accounts[account_id]
-            token_info = self.yggdrasil_tokens[account_id]
+            token_id = self._get_token_id(account_info["UserName"], account_info["YggdrasilAPI"])
+            token_info = self.yggdrasil_tokens[token_id]
 
             if self.yggdrasil_client.validate(
                 url=account_info["YggdrasilAPI"],
@@ -405,11 +445,27 @@ class YggdrasilAuthManager:
                 token_info["YggdrasilAPI"] = account_info["YggdrasilAPI"]
                 return token_info
 
-            account_info = self.refresh_token_and_profile(account_id)
+            self.refresh_token(account_id)
             token_info = self.yggdrasil_tokens[account_id]
 
             token_info["YggdrasilAPI"] = account_info["YggdrasilAPI"]
-            return token_info
+
+        return token_info
+
+    def get_yggdrasil_skin(self, account_id: str) -> dict:
+        """
+        获取账户选择角色皮肤(添加账户时已修改为指定登录账户)
+        :param account_id: 账户 ID
+        :return: Profile
+        """
+        with self._lock:
+            account_info = self.yggdrasil_accounts[account_id]
+
+        return self.yggdrasil_client.get_skin(
+            url=account_info["YggdrasilAPI"],
+            user_uuid=account_info["selectedProfile"]["id"],
+            follow_ali=False
+        )
 
     def close(self) -> None:
         """释放内部 HTTP 客户端资源"""
